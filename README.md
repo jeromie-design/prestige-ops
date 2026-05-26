@@ -102,9 +102,12 @@ sed -i \
 # STRAPI_API_TOKEN, POSTIZ_API_KEY, CLOUDFLARE_DEPLOY_HOOK_URL stay blank — fill after first boot.
 
 # 4. One-time Strapi project init (only on a fresh box; ~5 min)
-sudo dnf install -y nodejs npm
+# AL2023's default nodejs package is v18 — too old for Strapi 5. Use NodeSource v22.
+curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
+sudo dnf install -y nodejs
 cd strapi
-npx --yes create-strapi-app@latest . --quickstart --skip-cloud --no-run --typescript=false
+rm -f .gitkeep
+npx --yes create-strapi-app@latest . --skip-cloud --no-run --javascript
 cd ..
 
 # 5. Point DNS — at your DNS provider:
