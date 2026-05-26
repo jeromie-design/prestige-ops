@@ -1,0 +1,6 @@
+# Keep LF on files that run inside Linux containers.
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+Caddyfile   text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
