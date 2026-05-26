@@ -1,0 +1,150 @@
+name: prestige-ops
+
+# ---------------------------------------------------------------------------
+# Prestige Accessories ops stack
+#
+# One EC2 box hosts:
+#   - postgres   shared DB server (two databases: strapi, postiz)
+#   - redis      queue backend for postiz
+#   - strapi     Tyler's dashboard (headless CMS) — admin at ops.prestigeaccessories.net
+#   - postiz    social publisher — admin/callbacks at social.prestigeaccessories.net
+#   - bridge     webhook handler: Strapi publish -> Postiz API + Cloudflare Pages rebuild
+#   - caddy      reverse proxy with auto-TLS
+#
+# Independent from CinderLabs infra — does NOT live on any AIRA/Shield/license box.
+# ---------------------------------------------------------------------------
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh:ro
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  strapi:
+    build:
+      context: ./strapi
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 1337
+      DATABASE_CLIENT: postgres
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: strapi
+      DATABASE_USERNAME: ${POSTGRES_USER}
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_SSL: "false"
+      APP_KEYS: ${STRAPI_APP_KEYS}
+      API_TOKEN_SALT: ${STRAPI_API_TOKEN_SALT}
+      ADMIN_JWT_SECRET: ${STRAPI_ADMIN_JWT_SECRET}
+      TRANSFER_TOKEN_SALT: ${STRAPI_TRANSFER_TOKEN_SALT}
+      JWT_SECRET: ${STRAPI_JWT_SECRET}
+      URL: ${STRAPI_PUBLIC_URL}
+    volumes:
+      - strapi-uploads:/opt/app/public/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
+  postiz:
+    image: ghcr.io/gitroomhq/postiz-app:latest
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/postiz"
+      REDIS_URL: "redis://redis:6379"
+      JWT_SECRET: ${POSTIZ_JWT_SECRET}
+      MAIN_URL: ${POSTIZ_PUBLIC_URL}
+      FRONTEND_URL: ${POSTIZ_PUBLIC_URL}
+      NEXT_PUBLIC_BACKEND_URL: "${POSTIZ_PUBLIC_URL}/api"
+      BACKEND_INTERNAL_URL: "http://postiz:3000"
+      STORAGE_PROVIDER: local
+      UPLOAD_DIRECTORY: /uploads
+      NEXT_PUBLIC_UPLOAD_DIRECTORY: /uploads
+    volumes:
+      - postiz-uploads:/uploads
+      - postiz-config:/config
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - internal
+
+  bridge:
+    build:
+      context: ./bridge
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4000
+      POSTIZ_API_URL: "http://postiz:3000/api"
+      POSTIZ_API_KEY: ${POSTIZ_API_KEY}
+      STRAPI_INTERNAL_URL: "http://strapi:1337"
+      STRAPI_API_TOKEN: ${STRAPI_API_TOKEN}
+      CLOUDFLARE_DEPLOY_HOOK_URL: ${CLOUDFLARE_DEPLOY_HOOK_URL}
+      WEBHOOK_SHARED_SECRET: ${BRIDGE_WEBHOOK_SECRET}
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - strapi
+      - postiz
+    networks:
+      - internal
+
+volumes:
+  postgres-data:
+  redis-data:
+  strapi-uploads:
+  postiz-uploads:
+  postiz-config:
+  caddy-data:
+  caddy-config:
+
+networks:
+  internal:
+    driver: bridge

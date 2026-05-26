@@ -1,0 +1,12 @@
+# Caddy reverse proxy for the Prestige ops stack.
+# Two public subdomains terminate here; everything else stays on the internal network.
+
+ops.prestigeaccessories.net {
+    encode zstd gzip
+    reverse_proxy strapi:1337
+}
+
+social.prestigeaccessories.net {
+    encode zstd gzip
+    reverse_proxy postiz:3000
+}

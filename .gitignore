@@ -1,0 +1,11 @@
+.env
+.env.local
+.env.production
+node_modules/
+strapi/.tmp/
+strapi/build/
+strapi/dist/
+strapi/.cache/
+strapi/.strapi/
+*.log
+.DS_Store
