@@ -4,17 +4,19 @@
 
 FROM node:24-alpine
 
+# Native deps Strapi needs (sharp / image processing, sqlite header just in case)
 RUN apk add --no-cache build-base gcc autoconf automake zlib-dev libpng-dev nasm bash vips-dev git
 
 WORKDIR /opt/app
 
 ENV PATH=/opt/app/node_modules/.bin:$PATH
 
+# Install ALL deps (devDeps included — `npm run build` needs them to compile the admin panel)
 COPY package*.json ./
-RUN npm install --omit=dev
+RUN npm install
 
+# Copy the rest of the project and build the admin panel
 COPY . .
-
 RUN npm run build
 
 EXPOSE 1337
