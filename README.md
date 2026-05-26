@@ -69,15 +69,16 @@ Issue a read-only **API token** in Strapi (Settings &rarr; API Tokens) and paste
 **Box:** t3.medium, Amazon Linux 2023, 30 GB gp3, public IP, security group open on 22 (your IP only) + 80 + 443. Run from inside the box.
 
 ```bash
-# 1. Install Docker + compose
+# 1. Install Docker + git + compose V2 plugin
 sudo dnf install -y docker git
 sudo systemctl enable --now docker
 sudo usermod -aG docker ec2-user
+sudo mkdir -p /usr/local/lib/docker/cli-plugins
+sudo curl -fsSL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+    -o /usr/local/lib/docker/cli-plugins/docker-compose
+sudo chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 newgrp docker
-DOCKER_COMPOSE_VERSION=v2.29.0
-sudo curl -L "https://github.com/docker/compose/releases/download/${DOCKER_COMPOSE_VERSION}/docker-compose-linux-x86_64" \
-    -o /usr/local/bin/docker-compose
-sudo chmod +x /usr/local/bin/docker-compose
+docker compose version   # verify
 
 # 2. Clone this repo
 cd /opt
@@ -85,16 +86,25 @@ sudo mkdir prestige-ops && sudo chown ec2-user:ec2-user prestige-ops
 git clone https://github.com/jeromie-design/prestige-ops.git prestige-ops
 cd prestige-ops
 
-# 3. Populate .env
+# 3. Populate .env (auto-generates all initial secrets; leaves post-boot tokens blank)
 cp .env.example .env
-# Generate each secret with: openssl rand -hex 32
-# Set STRAPI_PUBLIC_URL and POSTIZ_PUBLIC_URL to the two subdomains.
-# Leave STRAPI_API_TOKEN, POSTIZ_API_KEY, CLOUDFLARE_DEPLOY_HOOK_URL blank for now — fill after first boot.
-nano .env
+gen() { openssl rand -hex 32; }
+sed -i \
+  -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(gen)|" \
+  -e "s|^STRAPI_APP_KEYS=.*|STRAPI_APP_KEYS=$(gen),$(gen),$(gen),$(gen)|" \
+  -e "s|^STRAPI_API_TOKEN_SALT=.*|STRAPI_API_TOKEN_SALT=$(gen)|" \
+  -e "s|^STRAPI_ADMIN_JWT_SECRET=.*|STRAPI_ADMIN_JWT_SECRET=$(gen)|" \
+  -e "s|^STRAPI_TRANSFER_TOKEN_SALT=.*|STRAPI_TRANSFER_TOKEN_SALT=$(gen)|" \
+  -e "s|^STRAPI_JWT_SECRET=.*|STRAPI_JWT_SECRET=$(gen)|" \
+  -e "s|^POSTIZ_JWT_SECRET=.*|POSTIZ_JWT_SECRET=$(gen)|" \
+  -e "s|^BRIDGE_WEBHOOK_SECRET=.*|BRIDGE_WEBHOOK_SECRET=$(gen)|" \
+  .env
+# STRAPI_API_TOKEN, POSTIZ_API_KEY, CLOUDFLARE_DEPLOY_HOOK_URL stay blank — fill after first boot.
 
-# 4. One-time Strapi project init (only on a fresh box)
+# 4. One-time Strapi project init (only on a fresh box; ~5 min)
+sudo dnf install -y nodejs npm
 cd strapi
-npx create-strapi-app@latest . --quickstart --skip-cloud --no-run --typescript=false
+npx --yes create-strapi-app@latest . --quickstart --skip-cloud --no-run --typescript=false
 cd ..
 
 # 5. Point DNS — at your DNS provider:
