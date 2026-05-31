@@ -30,14 +30,22 @@ const {
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
+// Lightweight access log so the bridge actually shows it received a request.
+app.use((req, _res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path} (secret=${req.get('x-bridge-secret') ? 'present' : 'missing'})`);
+  next();
+});
+
 app.get('/health', (_req, res) => res.json({ ok: true }));
 
 app.post('/strapi/publish', async (req, res) => {
   if (req.get('x-bridge-secret') !== WEBHOOK_SHARED_SECRET) {
+    console.warn('[bridge] 401 — x-bridge-secret missing or mismatched');
     return res.status(401).json({ error: 'unauthorized' });
   }
 
   const event = req.body;
+  console.log(`[bridge] event ${event?.event} on model ${event?.model}`);
   if (event?.model !== 'drop' || event?.event !== 'entry.publish') {
     return res.json({ skipped: true, reason: 'not a drop publish' });
   }
