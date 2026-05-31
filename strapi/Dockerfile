@@ -11,6 +11,10 @@ WORKDIR /opt/app
 
 ENV PATH=/opt/app/node_modules/.bin:$PATH
 
+# Strapi admin panel build (Vite + React) is memory-hungry. Default V8 heap inside
+# the container is too low and OOMs around ~940 MB. Bump to 3 GB explicitly.
+ENV NODE_OPTIONS=--max-old-space-size=3072
+
 # Install ALL deps (devDeps included — `npm run build` needs them to compile the admin panel)
 COPY package*.json ./
 RUN npm install
