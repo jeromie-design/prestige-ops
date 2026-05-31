@@ -132,18 +132,24 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4000
-      POSTIZ_API_URL: "http://postiz:3000/api"
-      POSTIZ_API_KEY: ${POSTIZ_API_KEY}
+      WEBHOOK_SHARED_SECRET: ${BRIDGE_WEBHOOK_SECRET}
+      # Strapi — public URL for image fetches, internal URL for write-back
+      STRAPI_PUBLIC_URL: ${STRAPI_PUBLIC_URL}
       STRAPI_INTERNAL_URL: "http://strapi:1337"
       STRAPI_API_TOKEN: ${STRAPI_API_TOKEN}
-      WEBHOOK_SHARED_SECRET: ${BRIDGE_WEBHOOK_SECRET}
-      # Site rebuild via GitHub marker commit (Cloudflare Workers auto-deploys on push)
+      STRAPI_BRIDGE_TOKEN: ${STRAPI_BRIDGE_TOKEN}
+      # Claude — fills socialCopy from product image + details
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5}
+      # Postiz (publish-time social fan-out)
+      POSTIZ_API_URL: "http://postiz:3000/api"
+      POSTIZ_API_KEY: ${POSTIZ_API_KEY}
+      # Site rebuild — Cloudflare deploy hook first, GitHub marker commit as fallback
+      CLOUDFLARE_DEPLOY_HOOK_URL: ${CLOUDFLARE_DEPLOY_HOOK_URL}
       GITHUB_DEPLOY_TOKEN: ${GITHUB_DEPLOY_TOKEN}
       GITHUB_DEPLOY_REPO: ${GITHUB_DEPLOY_REPO:-jeromie-design/prestige-site}
       GITHUB_DEPLOY_BRANCH: ${GITHUB_DEPLOY_BRANCH:-main}
       GITHUB_DEPLOY_MARKER_PATH: ${GITHUB_DEPLOY_MARKER_PATH:-.cloudflare/last-drop.txt}
-      # Optional fallback: Cloudflare Pages deploy hook URL
-      CLOUDFLARE_DEPLOY_HOOK_URL: ${CLOUDFLARE_DEPLOY_HOOK_URL}
     networks:
       - internal
 

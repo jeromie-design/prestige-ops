@@ -1,9 +1,9 @@
 {
   "name": "prestige-ops-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Webhook bridge: Strapi publish -> Postiz scheduling + Cloudflare Pages rebuild.",
+  "description": "Webhook bridge: Strapi draft -> AI socialCopy; Strapi publish -> Postiz scheduling + Cloudflare rebuild.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -13,6 +13,7 @@
     "node": ">=24"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
     "express": "^4.19.2"
   }
 }
