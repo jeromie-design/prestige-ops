@@ -3,6 +3,14 @@
 
 ops.prestigeaccessories.net {
     encode zstd gzip
+
+    # Bridge webhook endpoint — exposed publicly only because Strapi 5's webhook
+    # URL validator rejects internal Docker hostnames. The bridge itself validates
+    # x-bridge-secret on every request, so unauthorized callers get a 401.
+    handle_path /bridge/* {
+        reverse_proxy bridge:4000
+    }
+
     reverse_proxy strapi:1337
 }
 
