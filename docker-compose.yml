@@ -77,6 +77,23 @@ services:
     networks:
       - internal
 
+  temporal:
+    # Postiz uses Temporal for job scheduling (port 7233).
+    # auto-setup image provisions the temporal/temporal_visibility databases on our shared postgres.
+    image: temporalio/auto-setup:1.25
+    restart: unless-stopped
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD}
+      POSTGRES_SEEDS: postgres
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+
   postiz:
     image: ghcr.io/gitroomhq/postiz-app:latest
     restart: unless-stopped
@@ -91,6 +108,9 @@ services:
       STORAGE_PROVIDER: local
       UPLOAD_DIRECTORY: /uploads
       NEXT_PUBLIC_UPLOAD_DIRECTORY: /uploads
+      TEMPORAL_URL: "temporal:7233"
+      TEMPORAL_HOST: temporal
+      TEMPORAL_PORT: "7233"
     volumes:
       - postiz-uploads:/uploads
       - postiz-config:/config
@@ -99,6 +119,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      temporal:
+        condition: service_started
     networks:
       - internal
 
