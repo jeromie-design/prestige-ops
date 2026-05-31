@@ -1,0 +1,72 @@
+{
+  "kind": "collectionType",
+  "collectionName": "drops",
+  "info": {
+    "singularName": "drop",
+    "pluralName": "drops",
+    "displayName": "Drop",
+    "description": "A product drop — image, name, price, social copy. Drives /products tiles on prestigeaccessories.net and Postiz social publish."
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "pluginOptions": {},
+  "attributes": {
+    "name": {
+      "type": "string",
+      "required": true
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "name",
+      "required": true
+    },
+    "category": {
+      "type": "enumeration",
+      "enum": [
+        "Leather Goods",
+        "Jewelry",
+        "Silks",
+        "Eyewear"
+      ]
+    },
+    "price": {
+      "type": "string"
+    },
+    "tag": {
+      "type": "enumeration",
+      "enum": [
+        "New",
+        "Limited"
+      ]
+    },
+    "image": {
+      "type": "media",
+      "multiple": false,
+      "required": true,
+      "allowedTypes": [
+        "images"
+      ]
+    },
+    "gallery": {
+      "type": "media",
+      "multiple": true,
+      "allowedTypes": [
+        "images"
+      ]
+    },
+    "socialCopy": {
+      "type": "text"
+    },
+    "channels": {
+      "type": "json"
+    },
+    "scheduledAt": {
+      "type": "datetime"
+    },
+    "featured": {
+      "type": "boolean",
+      "default": true
+    }
+  }
+}
