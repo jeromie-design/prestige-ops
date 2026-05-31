@@ -56,10 +56,14 @@ app.post('/strapi/publish', async (req, res) => {
     triggerSiteRebuild(drop),
   ]);
 
+  const social = summarize(results[0]);
+  const rebuild = summarize(results[1]);
+  console.log(`[bridge] drop=${drop?.slug ?? drop?.id} social=${JSON.stringify(social)} rebuild=${JSON.stringify(rebuild)}`);
+
   res.json({
     drop: drop?.slug ?? drop?.id,
-    social: summarize(results[0]),
-    rebuild: summarize(results[1]),
+    social,
+    rebuild,
   });
 });
 
