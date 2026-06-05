@@ -1,11 +1,11 @@
-// Bridge service — translates Strapi webhooks into useful side-effects.
+// Bridge service, translates Strapi webhooks into useful side-effects.
 //
 // Routes:
-//   POST /strapi/draft     — fires on entry.create / entry.update of a Drop.
+//   POST /strapi/draft    , fires on entry.create / entry.update of a Drop.
 //                            If socialCopy is empty, generates it with Claude
 //                            (vision + product details) and PATCHes Strapi.
 //                            Tyler then reviews/edits before publishing.
-//   POST /strapi/publish   — fires on entry.publish of a Drop.
+//   POST /strapi/publish  , fires on entry.publish of a Drop.
 //                            1) schedules Postiz social posts (when configured)
 //                            2) triggers a Cloudflare site rebuild.
 //
@@ -28,7 +28,7 @@ const {
   PORT = 4000,
   WEBHOOK_SHARED_SECRET,
 
-  // Postiz (publish path) — currently disabled until Temporal is sorted
+  // Postiz (publish path), currently disabled until Temporal is sorted
   POSTIZ_API_URL,
   POSTIZ_API_KEY,
 
@@ -37,7 +37,7 @@ const {
   STRAPI_INTERNAL_URL = 'http://strapi:1337',
   STRAPI_BRIDGE_TOKEN,
 
-  // Claude — drives socialCopy generation
+  // Claude, drives socialCopy generation
   ANTHROPIC_API_KEY,
   ANTHROPIC_MODEL = 'claude-sonnet-4-5',
 
@@ -64,13 +64,13 @@ const CAPTION_FIELDS = [
 
 const BRAND_VOICE_SYSTEM_PROMPT = `You write product copy for Prestige Accessories, a curated boutique selling designer goods (belts, shoes, jackets, and other accessories).
 
-Brand voice — applies to EVERY platform:
+Brand voice, applies to EVERY platform:
 - Restrained, considered, slightly literary
 - Confident without being boastful. Describes the piece, never the buyer.
 - Specific sensory details (texture, weight, color, finish, presentation)
 - Mentions the maker and signature touches when distinctive
 - No exclamation marks, no hard-sell language, no clichés ("luxury redefined", "elevate your style")
-- NEVER use em-dashes (—). Use commas, periods, parentheses, or rewrite the sentence. This is a hard rule.
+- NEVER use em-dashes (the long dash character, U+2014). Use commas, periods, parentheses, or rewrite the sentence. This is a hard rule.
 - Hashtags only when the platform expects them. Keep tag counts lean (3-6); luxury brands don't spam.
 
 Reference voice example:
@@ -82,7 +82,7 @@ Per-platform specs:
 - captionTikTok: 80-120 words. Hook-first opening question or statement. Slightly more conversational. 3-5 hashtags at end.
 - captionPinterest: 100-200 words. SEO-rich, keyword-dense. Sensory descriptors. No hashtags (Pinterest treats text differently). Include the brand, material, and color naturally.
 - captionThreads: 50-100 words. Conversational but still considered. 2-3 hashtags max.
-- captionYoutubeTitle: <60 chars. Format: "<Brand> <Piece> — <Distinctive Detail>" or similar. Searchable.
+- captionYoutubeTitle: <60 chars. Format: "<Brand> <Piece>, <Distinctive Detail>" or similar. Searchable.
 - captionYoutubeDescription: 200-300 words. Longer story. Material origin, finish, presentation, fit/care notes. End with brand/site URL line. No hashtags in body; YouTube uses tags separately.
 
 When you call the publish_captions tool, fill every field with a finished caption. No preamble, no labels, no markdown.`;
@@ -106,7 +106,7 @@ app.get('/health', (_req, res) => res.json({
 }));
 
 // -----------------------------------------------------------------------------
-// /strapi/draft — entry.create / entry.update — AI-fill socialCopy if empty
+// /strapi/draft, entry.create / entry.update, AI-fill socialCopy if empty
 // -----------------------------------------------------------------------------
 
 app.post('/strapi/draft', async (req, res) => {
@@ -121,7 +121,7 @@ app.post('/strapi/draft', async (req, res) => {
   const drop = event.entry;
   if (!drop) return res.json({ skipped: true, reason: 'no entry payload' });
 
-  // Figure out which caption fields are empty. Only fill empty ones — Tyler's edits never get clobbered.
+  // Figure out which caption fields are empty. Only fill empty ones, Tyler's edits never get clobbered.
   const emptyFields = CAPTION_FIELDS.filter(field => {
     const v = drop[field];
     return !v || (typeof v === 'string' && v.trim().length === 0);
@@ -229,12 +229,12 @@ async function patchDrop(documentId, patch) {
 }
 
 // -----------------------------------------------------------------------------
-// /strapi/publish — entry.publish — schedule social posts + rebuild site
+// /strapi/publish, entry.publish, schedule social posts + rebuild site
 // -----------------------------------------------------------------------------
 
 app.post('/strapi/publish', async (req, res) => {
   if (req.get('x-bridge-secret') !== WEBHOOK_SHARED_SECRET) {
-    console.warn('[bridge] 401 — x-bridge-secret missing or mismatched');
+    console.warn('[bridge] 401, x-bridge-secret missing or mismatched');
     return res.status(401).json({ error: 'unauthorized' });
   }
 

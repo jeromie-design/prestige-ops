@@ -6,12 +6,12 @@ name: prestige-ops
 # One EC2 box hosts:
 #   - postgres   shared DB server (two databases: strapi, postiz)
 #   - redis      queue backend for postiz
-#   - strapi     Tyler's dashboard (headless CMS) — admin at ops.prestigeaccessories.net
-#   - postiz    social publisher — admin/callbacks at social.prestigeaccessories.net
+#   - strapi     Tyler's dashboard (headless CMS), admin at ops.prestigeaccessories.net
+#   - postiz    social publisher, admin/callbacks at social.prestigeaccessories.net
 #   - bridge     webhook handler: Strapi publish -> Postiz API + Cloudflare Pages rebuild
 #   - caddy      reverse proxy with auto-TLS
 #
-# Independent from CinderLabs infra — does NOT live on any AIRA/Shield/license box.
+# Independent from CinderLabs infra, does NOT live on any AIRA/Shield/license box.
 # ---------------------------------------------------------------------------
 
 services:
@@ -133,18 +133,18 @@ services:
       NODE_ENV: production
       PORT: 4000
       WEBHOOK_SHARED_SECRET: ${BRIDGE_WEBHOOK_SECRET}
-      # Strapi — public URL for image fetches, internal URL for write-back
+      # Strapi, public URL for image fetches, internal URL for write-back
       STRAPI_PUBLIC_URL: ${STRAPI_PUBLIC_URL}
       STRAPI_INTERNAL_URL: "http://strapi:1337"
       STRAPI_API_TOKEN: ${STRAPI_API_TOKEN}
       STRAPI_BRIDGE_TOKEN: ${STRAPI_BRIDGE_TOKEN}
-      # Claude — fills socialCopy from product image + details
+      # Claude, fills socialCopy from product image + details
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5}
       # Postiz (publish-time social fan-out)
       POSTIZ_API_URL: "http://postiz:3000/api"
       POSTIZ_API_KEY: ${POSTIZ_API_KEY}
-      # Site rebuild — Cloudflare deploy hook first, GitHub marker commit as fallback
+      # Site rebuild, Cloudflare deploy hook first, GitHub marker commit as fallback
       CLOUDFLARE_DEPLOY_HOOK_URL: ${CLOUDFLARE_DEPLOY_HOOK_URL}
       GITHUB_DEPLOY_TOKEN: ${GITHUB_DEPLOY_TOKEN}
       GITHUB_DEPLOY_REPO: ${GITHUB_DEPLOY_REPO:-jeromie-design/prestige-site}

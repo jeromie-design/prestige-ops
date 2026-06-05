@@ -53,7 +53,7 @@ Tyler creates one Drop per piece. Create this in **Strapi admin &rarr; Content-T
 | `channels` | JSON | List of Postiz channel IDs to publish to. Populated after channels are connected in Postiz. |
 | `scheduledAt` | DateTime (optional) | If set, Postiz schedules instead of publishing immediately. |
 | `featured` | Boolean (default true) | Tile appears on /products when true. |
-| `publishedAt` | DateTime | Built-in. Used by Strapi's draft/publish flow — bridge only fires on publish. |
+| `publishedAt` | DateTime | Built-in. Used by Strapi's draft/publish flow, bridge only fires on publish. |
 
 Add a **webhook** in Strapi (Settings &rarr; Webhooks):
 - **URL:** `http://bridge:4000/strapi/publish`
@@ -99,10 +99,10 @@ sed -i \
   -e "s|^POSTIZ_JWT_SECRET=.*|POSTIZ_JWT_SECRET=$(gen)|" \
   -e "s|^BRIDGE_WEBHOOK_SECRET=.*|BRIDGE_WEBHOOK_SECRET=$(gen)|" \
   .env
-# STRAPI_API_TOKEN, POSTIZ_API_KEY, CLOUDFLARE_DEPLOY_HOOK_URL stay blank — fill after first boot.
+# STRAPI_API_TOKEN, POSTIZ_API_KEY, CLOUDFLARE_DEPLOY_HOOK_URL stay blank, fill after first boot.
 
 # 4. One-time Strapi project init (only on a fresh box; ~5 min)
-# AL2023's default nodejs package is v18 — too old for Strapi 5. Use NodeSource v22.
+# AL2023's default nodejs package is v18, too old for Strapi 5. Use NodeSource v22.
 curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
 sudo dnf install -y nodejs
 cd strapi
@@ -110,7 +110,7 @@ rm -f .gitkeep
 npx --yes create-strapi-app@latest . --skip-cloud --no-run --javascript
 cd ..
 
-# 5. Point DNS — at your DNS provider:
+# 5. Point DNS, at your DNS provider:
 #    ops.prestigeaccessories.net      A  <EC2 public IP>
 #    social.prestigeaccessories.net   A  <EC2 public IP>
 # Wait for DNS to propagate (dig ops.prestigeaccessories.net) before bringing Caddy up,
@@ -123,11 +123,11 @@ docker compose logs -f
 
 ## Post-boot runbook (Strapi admin first-time setup)
 
-The Drop content type ships as schema-as-code under `strapi/src/api/drop/`. On first Strapi container boot, Strapi auto-migrates the columns. Everything below is what a human still has to click after that — the steps that can't be committed to the repo (they create credentials).
+The Drop content type ships as schema-as-code under `strapi/src/api/drop/`. On first Strapi container boot, Strapi auto-migrates the columns. Everything below is what a human still has to click after that, the steps that can't be committed to the repo (they create credentials).
 
 ### 1. Create the Strapi admin user
 
-- Visit `https://ops.prestigeaccessories.net/admin` — Strapi shows a one-time registration form.
+- Visit `https://ops.prestigeaccessories.net/admin`, Strapi shows a one-time registration form.
 - Enter first name, last name, real email (gets password-reset links), strong password.
 - Click **Let's start**.
 
@@ -144,8 +144,8 @@ docker compose exec -it strapi npx strapi admin:reset-user-password
 - Description: `Read-only access for prestige-site Astro build`
 - Token duration: **Unlimited**
 - Token type: **Read-only**
-- Click **Save**. The 256-char hex token is shown ONCE on the next screen — click **Copy**.
-- Paste into Cloudflare: `prestige-site` Worker &rarr; Settings &rarr; **Build &rarr; Variables and secrets** (the second one — Build section, not the top-level runtime one) &rarr; **+ Add**:
+- Click **Save**. The 256-char hex token is shown ONCE on the next screen, click **Copy**.
+- Paste into Cloudflare: `prestige-site` Worker &rarr; Settings &rarr; **Build &rarr; Variables and secrets** (the second one, Build section, not the top-level runtime one) &rarr; **+ Add**:
   - Type: Secret
   - Name: `STRAPI_API_TOKEN`
   - Value: paste the token
@@ -158,7 +158,7 @@ The bridge needs to PATCH Drops to write back AI-generated captions. This is a S
 
 - Strapi admin &rarr; **Settings** &rarr; **API Tokens** &rarr; **Create new API Token**.
 - Name: `bridge`
-- Description: `Bridge write-back — AI caption fill on entry.create/update`
+- Description: `Bridge write-back, AI caption fill on entry.create/update`
 - Token duration: **Unlimited**
 - Token type: **Custom**
 - In **Permissions**, expand **Drop** and tick:
@@ -176,7 +176,7 @@ Both webhooks point at the bridge through Caddy (`/bridge/strapi/...`). Strapi 5
 
 The bridge validates a shared secret (`BRIDGE_WEBHOOK_SECRET` from `.env`) on every request, so unauthorized callers get 401.
 
-**Webhook A — AI caption fill on draft save**
+**Webhook A, AI caption fill on draft save**
 
 - Settings &rarr; **Webhooks** &rarr; **Create new webhook**.
 - Name: `AI Drop draft` (only letters / numbers / spaces / underscores allowed)
@@ -185,7 +185,7 @@ The bridge validates a shared secret (`BRIDGE_WEBHOOK_SECRET` from `.env`) on ev
 - Events: under **Entry**, tick **Create** and **Update**. Nothing else.
 - Save.
 
-**Webhook B — site rebuild + social fan-out on publish**
+**Webhook B, site rebuild + social fan-out on publish**
 
 - Settings &rarr; **Webhooks** &rarr; **Create new webhook**.
 - Name: `Bridge Drop publish`
@@ -208,9 +208,9 @@ The bridge validates a shared secret (`BRIDGE_WEBHOOK_SECRET` from `.env`) on ev
 - In Strapi admin &rarr; **Content Manager** &rarr; **Drop** &rarr; **Create new entry**.
 - Fill: name, category, image (upload one), price, tag.
 - Click **Save** (not Publish yet). Within ~10 sec, all six caption fields auto-fill via Claude.
-- Refresh the entry — review the captions, edit any that need tweaking.
+- Refresh the entry, review the captions, edit any that need tweaking.
 - Click **Publish**. The bridge fires the Cloudflare deploy hook; the live site rebuilds in ~2-3 min.
-- Visit `https://www.prestigeaccessories.net/products` — the new tile should appear.
+- Visit `https://www.prestigeaccessories.net/products`, the new tile should appear.
 
 ### 7. Postiz + social platform credentials (separate setup, multi-week)
 
@@ -223,7 +223,7 @@ See the **Application roadmap** section below for the per-platform sequence and 
 
 ---
 
-## Application roadmap — social platforms
+## Application roadmap, social platforms
 
 For Postiz to actually post to a platform, that platform requires a registered developer app with review-approved scopes. Reviews are slow; start them in parallel.
 

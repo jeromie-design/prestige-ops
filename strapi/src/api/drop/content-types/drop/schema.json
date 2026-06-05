@@ -5,7 +5,7 @@
     "singularName": "drop",
     "pluralName": "drops",
     "displayName": "Drop",
-    "description": "A product drop — image, name, price, social copy. Drives /products tiles on prestigeaccessories.net and Postiz social publish."
+    "description": "A product drop, image, name, price, social copy. Drives /products tiles on prestigeaccessories.net and Postiz social publish."
   },
   "options": {
     "draftAndPublish": true
