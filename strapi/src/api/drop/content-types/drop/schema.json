@@ -24,10 +24,10 @@
     "category": {
       "type": "enumeration",
       "enum": [
-        "Leather Goods",
-        "Jewelry",
-        "Silks",
-        "Eyewear"
+        "Belts",
+        "Shoes",
+        "Jackets",
+        "Accessories"
       ]
     },
     "price": {
