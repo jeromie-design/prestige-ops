@@ -121,22 +121,128 @@ docker compose up -d
 docker compose logs -f
 ```
 
-**Post-boot checklist:**
+## Post-boot runbook (Strapi admin first-time setup)
 
-1. Visit `https://ops.prestigeaccessories.net` &rarr; create the Strapi admin account.
-2. Build the **Drop** content type per the table above.
-3. Create the **webhook** pointing at the bridge.
-4. Issue a Strapi **API token** &rarr; paste into `.env` as `STRAPI_API_TOKEN` &rarr; `docker compose up -d bridge`.
-5. Visit `https://social.prestigeaccessories.net` &rarr; create Postiz admin account &rarr; connect Tyler's IG / TikTok / YouTube / etc. (each platform needs its own developer-app credentials; document those in `1Password &gt; Prestige` or similar).
-6. Issue a Postiz **API key** &rarr; paste into `.env` as `POSTIZ_API_KEY` &rarr; `docker compose up -d bridge`.
-7. In Cloudflare dashboard &rarr; Pages &rarr; `prestige-site` &rarr; Settings &rarr; Builds & deployments &rarr; **Deploy hooks** &rarr; create one named "drop-publish" &rarr; paste URL into `.env` as `CLOUDFLARE_DEPLOY_HOOK_URL` &rarr; `docker compose up -d bridge`.
-8. Tyler creates a test Drop &rarr; clicks publish &rarr; confirm social post lands AND prestige-site rebuilds.
+The Drop content type ships as schema-as-code under `strapi/src/api/drop/`. On first Strapi container boot, Strapi auto-migrates the columns. Everything below is what a human still has to click after that — the steps that can't be committed to the repo (they create credentials).
+
+### 1. Create the Strapi admin user
+
+- Visit `https://ops.prestigeaccessories.net/admin` — Strapi shows a one-time registration form.
+- Enter first name, last name, real email (gets password-reset links), strong password.
+- Click **Let's start**.
+
+If you ever lock yourself out, reset the password from inside the running container (no email infra required):
+
+```bash
+docker compose exec -it strapi npx strapi admin:reset-user-password
+```
+
+### 2. Issue the read-only API token (powers the prestige-site Astro build)
+
+- Strapi admin &rarr; **Settings** (gear icon) &rarr; **API Tokens** &rarr; **Create new API Token**.
+- Name: `prestige-site`
+- Description: `Read-only access for prestige-site Astro build`
+- Token duration: **Unlimited**
+- Token type: **Read-only**
+- Click **Save**. The 256-char hex token is shown ONCE on the next screen — click **Copy**.
+- Paste into Cloudflare: `prestige-site` Worker &rarr; Settings &rarr; **Build &rarr; Variables and secrets** (the second one — Build section, not the top-level runtime one) &rarr; **+ Add**:
+  - Type: Secret
+  - Name: `STRAPI_API_TOKEN`
+  - Value: paste the token
+- Also add (Plaintext): `STRAPI_URL` = `https://ops.prestigeaccessories.net`
+- Trigger a redeploy on the prestige-site Cloudflare project (or push any commit).
+
+### 3. Issue the bridge write-back token (powers AI caption fill)
+
+The bridge needs to PATCH Drops to write back AI-generated captions. This is a SEPARATE token from #2.
+
+- Strapi admin &rarr; **Settings** &rarr; **API Tokens** &rarr; **Create new API Token**.
+- Name: `bridge`
+- Description: `Bridge write-back — AI caption fill on entry.create/update`
+- Token duration: **Unlimited**
+- Token type: **Custom**
+- In **Permissions**, expand **Drop** and tick:
+  - `find`
+  - `findOne`
+  - `update`
+- Leave everything else unticked. **Save**.
+- Copy the 256-char token shown on the next screen.
+- On the EC2 box, paste into `/opt/prestige-ops/.env` as `STRAPI_BRIDGE_TOKEN=<token>`.
+- Restart bridge: `docker compose up -d bridge`.
+
+### 4. Add the two Strapi webhooks
+
+Both webhooks point at the bridge through Caddy (`/bridge/strapi/...`). Strapi 5's URL validator rejects internal Docker hostnames, so the bridge has to be reached via the public HTTPS URL.
+
+The bridge validates a shared secret (`BRIDGE_WEBHOOK_SECRET` from `.env`) on every request, so unauthorized callers get 401.
+
+**Webhook A — AI caption fill on draft save**
+
+- Settings &rarr; **Webhooks** &rarr; **Create new webhook**.
+- Name: `AI Drop draft` (only letters / numbers / spaces / underscores allowed)
+- URL: `https://ops.prestigeaccessories.net/bridge/strapi/draft`
+- Headers: add one row &rarr; Key `x-bridge-secret`, Value = your `BRIDGE_WEBHOOK_SECRET` from `.env` (grab it via `grep '^BRIDGE_WEBHOOK_SECRET=' .env | cut -d= -f2-`)
+- Events: under **Entry**, tick **Create** and **Update**. Nothing else.
+- Save.
+
+**Webhook B — site rebuild + social fan-out on publish**
+
+- Settings &rarr; **Webhooks** &rarr; **Create new webhook**.
+- Name: `Bridge Drop publish`
+- URL: `https://ops.prestigeaccessories.net/bridge/strapi/publish`
+- Headers: `x-bridge-secret` = same `BRIDGE_WEBHOOK_SECRET` value.
+- Events: under **Entry**, tick **Publish** only.
+- Save.
+
+### 5. Cloudflare deploy hook (Workers site rebuild)
+
+- Cloudflare dashboard &rarr; **prestige-site** project &rarr; Settings &rarr; scroll to **Build** section &rarr; **Deploy Hooks** &rarr; **+ Add**.
+- Name: `drop-publish`
+- Branch: `main`
+- Save. Cloudflare gives you a URL like `https://api.cloudflare.com/client/v4/pages/webhooks/deploy_hooks/...`. Copy it.
+- On EC2: paste into `.env` as `CLOUDFLARE_DEPLOY_HOOK_URL=<url>`.
+- Restart bridge: `docker compose up -d bridge`.
+
+### 6. Verify the chain end-to-end
+
+- In Strapi admin &rarr; **Content Manager** &rarr; **Drop** &rarr; **Create new entry**.
+- Fill: name, category, image (upload one), price, tag.
+- Click **Save** (not Publish yet). Within ~10 sec, all six caption fields auto-fill via Claude.
+- Refresh the entry — review the captions, edit any that need tweaking.
+- Click **Publish**. The bridge fires the Cloudflare deploy hook; the live site rebuilds in ~2-3 min.
+- Visit `https://www.prestigeaccessories.net/products` — the new tile should appear.
+
+### 7. Postiz + social platform credentials (separate setup, multi-week)
+
+Each social platform (Instagram, TikTok, YouTube, Pinterest, Threads) needs:
+- A Business account on that platform connected to Prestige Accessories
+- A Developer app with the right scopes (most require app review, days to weeks)
+- OAuth credentials pasted into Postiz at `https://social.prestigeaccessories.net`
+
+See the **Application roadmap** section below for the per-platform sequence and time estimates.
 
 ---
 
-## Updating the site
+## Application roadmap — social platforms
 
-Patching `prestige-site/src/pages/products.astro` to consume Strapi is a follow-up — tracked separately. Until that lands, publishing a Drop still triggers a site rebuild but the tiles remain placeholder.
+For Postiz to actually post to a platform, that platform requires a registered developer app with review-approved scopes. Reviews are slow; start them in parallel.
+
+| # | Platform | Where to register | Scope to request | Review window |
+|---|---|---|---|---|
+| 1 | **Meta** (Instagram + Facebook + Threads) | [developers.facebook.com](https://developers.facebook.com) | `instagram_content_publish`, `pages_manage_posts`, `business_management` + Meta Business verification | **2-4 weeks** |
+| 2 | **YouTube** (Google) | [console.cloud.google.com](https://console.cloud.google.com) | YouTube Data API v3 + `youtube.upload` (OAuth verification) | 1-2 weeks |
+| 3 | **TikTok** | [developers.tiktok.com](https://developers.tiktok.com) | Content Posting API + `video.publish` | 1-2 weeks |
+| 4 | **Pinterest** | [developers.pinterest.com](https://developers.pinterest.com) | Pin creation API (standard) | 3-5 days |
+
+**Documents needed for Meta Business verification (the slowest item):**
+- Legal business name + EIN
+- Business address (matching formation docs)
+- Business formation documents (LLC/Corp filings)
+- Verified phone number
+- Brand website + privacy + terms URLs (all live on prestigeaccessories.net)
+- Brand logo (square, &ge;512&times;512)
+
+**Order: start Meta tonight.** Even if you don't finish the app review submission, get Business Verification submitted so its clock starts. Pinterest comes online fastest if you want a quick early win.
 
 ---
 
