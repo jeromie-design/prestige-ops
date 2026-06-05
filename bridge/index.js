@@ -51,21 +51,40 @@ const {
 
 const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
 
+// Fields the bridge auto-fills. Order matters for the "skip if any already set" check below.
+const CAPTION_FIELDS = [
+  'socialCopy',
+  'captionInstagram',
+  'captionTikTok',
+  'captionPinterest',
+  'captionThreads',
+  'captionYoutubeTitle',
+  'captionYoutubeDescription',
+];
+
 const BRAND_VOICE_SYSTEM_PROMPT = `You write product copy for Prestige Accessories, a curated boutique selling designer accessories (leather goods, jewelry, silks, eyewear).
 
-Brand voice:
+Brand voice — applies to EVERY platform:
 - Restrained, considered, slightly literary
 - Confident without being boastful — describes the piece, never the buyer
-- Specific sensory details (texture, weight, color, finish)
-- Mentions the maker and presentation when distinctive
-- One short paragraph, 2-3 sentences, roughly 30 words
+- Specific sensory details (texture, weight, color, finish, presentation)
+- Mentions the maker and signature touches when distinctive
+- No exclamation marks, no hard-sell language, no clichés ("luxury redefined", "elevate your style")
+- Hashtags only when the platform expects them. Keep tag counts lean (3-6); luxury brands don't spam.
 
-Reference examples (do not copy):
-- "Italian leather, hand-finished marble buckle. Buscemi at their most restrained — and most worth owning. Presented in the signature feather-embossed box."
-- "Hand-polished horn, oxidised silver. A piece that grows quieter with age."
-- "Padded silk twill, brushed cotton lining. The kind of weight you only notice in its absence."
+Reference voice example:
+"Italian leather, hand-finished marble buckle. Buscemi at their most restrained — and most worth owning. Presented in the signature feather-embossed box."
 
-Output ONLY the copy paragraph. No preamble, no quotes, no markdown, no labels.`;
+Per-platform specs:
+- socialCopy: brand-voice base description used on the product page. 2-3 sentences, ~30 words. NO hashtags.
+- captionInstagram: 100-150 words. Short hook line, then descriptive paragraph. 4-6 hashtags at end (brand + category + material + style).
+- captionTikTok: 80-120 words. Hook-first opening question or statement. Slightly more conversational. 3-5 hashtags at end.
+- captionPinterest: 100-200 words. SEO-rich, keyword-dense. Sensory descriptors. No hashtags (Pinterest treats text differently). Include the brand, material, and color naturally.
+- captionThreads: 50-100 words. Conversational but still considered. 2-3 hashtags max.
+- captionYoutubeTitle: <60 chars. Format: "<Brand> <Piece> — <Distinctive Detail>" or similar. Searchable.
+- captionYoutubeDescription: 200-300 words. Longer story. Material origin, finish, presentation, fit/care notes. End with brand/site URL line. No hashtags in body; YouTube uses tags separately.
+
+When you call the publish_captions tool, fill every field with a finished caption. No preamble, no labels, no markdown.`;
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -101,9 +120,15 @@ app.post('/strapi/draft', async (req, res) => {
   const drop = event.entry;
   if (!drop) return res.json({ skipped: true, reason: 'no entry payload' });
 
-  if (drop.socialCopy && drop.socialCopy.trim().length > 0) {
-    console.log(`[bridge] drop=${drop.slug ?? drop.id} socialCopy already set; skipping AI fill`);
-    return res.json({ skipped: true, reason: 'socialCopy already populated' });
+  // Figure out which caption fields are empty. Only fill empty ones — Tyler's edits never get clobbered.
+  const emptyFields = CAPTION_FIELDS.filter(field => {
+    const v = drop[field];
+    return !v || (typeof v === 'string' && v.trim().length === 0);
+  });
+
+  if (emptyFields.length === 0) {
+    console.log(`[bridge] drop=${drop.slug ?? drop.id} all captions already set; skipping AI fill`);
+    return res.json({ skipped: true, reason: 'all captions already populated' });
   }
 
   if (!anthropic) {
@@ -114,18 +139,22 @@ app.post('/strapi/draft', async (req, res) => {
   }
 
   try {
-    const copy = await generateCopyFromDrop(drop);
-    await patchDropSocialCopy(drop.documentId ?? drop.id, copy);
-    console.log(`[bridge] drop=${drop.slug ?? drop.id} ai_copy_filled chars=${copy.length}`);
-    res.json({ ok: true, drop: drop.slug ?? drop.id, generated_chars: copy.length });
+    const captions = await generateAllCaptions(drop);
+    // Build a patch with only the empty fields filled (preserve Tyler's edits)
+    const patch = {};
+    for (const field of emptyFields) {
+      if (captions[field]) patch[field] = captions[field];
+    }
+    await patchDrop(drop.documentId ?? drop.id, patch);
+    console.log(`[bridge] drop=${drop.slug ?? drop.id} ai_filled=[${Object.keys(patch).join(',')}]`);
+    res.json({ ok: true, drop: drop.slug ?? drop.id, filled: Object.keys(patch) });
   } catch (err) {
     console.error(`[bridge] AI fill failed for drop=${drop.slug ?? drop.id}: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
 
-async function generateCopyFromDrop(drop) {
-  // Build a multi-modal user message. Image if available, then product details.
+async function generateAllCaptions(drop) {
   const content = [];
 
   const imagePath = drop?.image?.url ?? null;
@@ -146,27 +175,42 @@ async function generateCopyFromDrop(drop) {
 
   content.push({
     type: 'text',
-    text: `Write the social copy for this piece. Use the image to anchor the sensory details if one is shown.\n\n${details}`,
+    text: `Use the image (if provided) to anchor sensory details. Then write platform-specific captions for this piece by calling the publish_captions tool.\n\nProduct details:\n${details}\n\nFill every field with a complete, ready-to-publish caption. Follow the per-platform specs in the system prompt strictly.`,
   });
+
+  const tool = {
+    name: 'publish_captions',
+    description: 'Set the platform-specific captions for this Drop. Every field is required and must be a complete caption ready to publish.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        socialCopy: { type: 'string', description: 'Brand-voice base description for the product page. 2-3 sentences, ~30 words. No hashtags.' },
+        captionInstagram: { type: 'string', description: 'Instagram caption: 100-150 words, hook + paragraph, 4-6 hashtags at end.' },
+        captionTikTok: { type: 'string', description: 'TikTok caption: 80-120 words, hook-first, 3-5 hashtags at end.' },
+        captionPinterest: { type: 'string', description: 'Pinterest description: 100-200 words, SEO-rich, no hashtags.' },
+        captionThreads: { type: 'string', description: 'Threads post: 50-100 words, conversational, 2-3 hashtags max.' },
+        captionYoutubeTitle: { type: 'string', description: 'YouTube video title: under 60 characters, searchable, brand + piece + distinctive detail.' },
+        captionYoutubeDescription: { type: 'string', description: 'YouTube description: 200-300 words, longer story, ends with brand/site line.' },
+      },
+      required: CAPTION_FIELDS,
+    },
+  };
 
   const response = await anthropic.messages.create({
     model: ANTHROPIC_MODEL,
-    max_tokens: 250,
+    max_tokens: 2500,
     system: BRAND_VOICE_SYSTEM_PROMPT,
+    tools: [tool],
+    tool_choice: { type: 'tool', name: 'publish_captions' },
     messages: [{ role: 'user', content }],
   });
 
-  const out = response.content
-    .filter(block => block.type === 'text')
-    .map(block => block.text)
-    .join('')
-    .trim();
-
-  if (!out) throw new Error('Claude returned empty copy');
-  return out;
+  const toolUse = response.content.find(b => b.type === 'tool_use' && b.name === 'publish_captions');
+  if (!toolUse) throw new Error('Claude did not call the publish_captions tool');
+  return toolUse.input;
 }
 
-async function patchDropSocialCopy(documentId, socialCopy) {
+async function patchDrop(documentId, patch) {
   const url = `${STRAPI_INTERNAL_URL}/api/drops/${documentId}`;
   const res = await fetch(url, {
     method: 'PUT',
@@ -174,7 +218,7 @@ async function patchDropSocialCopy(documentId, socialCopy) {
       'Authorization': `Bearer ${STRAPI_BRIDGE_TOKEN}`,
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({ data: { socialCopy } }),
+    body: JSON.stringify({ data: patch }),
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');

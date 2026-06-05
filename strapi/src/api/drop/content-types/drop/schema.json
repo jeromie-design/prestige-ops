@@ -58,6 +58,24 @@
     "socialCopy": {
       "type": "text"
     },
+    "captionInstagram": {
+      "type": "text"
+    },
+    "captionTikTok": {
+      "type": "text"
+    },
+    "captionPinterest": {
+      "type": "text"
+    },
+    "captionThreads": {
+      "type": "text"
+    },
+    "captionYoutubeTitle": {
+      "type": "string"
+    },
+    "captionYoutubeDescription": {
+      "type": "text"
+    },
     "channels": {
       "type": "json"
     },
