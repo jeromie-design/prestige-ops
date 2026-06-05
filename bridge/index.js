@@ -62,7 +62,7 @@ const CAPTION_FIELDS = [
   'captionYoutubeDescription',
 ];
 
-const BRAND_VOICE_SYSTEM_PROMPT = `You write product copy for Prestige Accessories, a curated boutique selling designer accessories (leather goods, jewelry, silks, eyewear).
+const BRAND_VOICE_SYSTEM_PROMPT = `You write product copy for Prestige Accessories, a curated boutique selling designer goods (belts, shoes, jackets, and other accessories).
 
 Brand voice — applies to EVERY platform:
 - Restrained, considered, slightly literary

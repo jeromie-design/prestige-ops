@@ -44,7 +44,7 @@ Tyler creates one Drop per piece. Create this in **Strapi admin &rarr; Content-T
 |---|---|---|
 | `name` | Text (short) | Required. Product name, e.g. "Piece 09". |
 | `slug` | UID (target: name) | Required. URL fragment. |
-| `category` | Enum | `Leather Goods`, `Jewelry`, `Silks`, `Eyewear`. |
+| `category` | Enum | `Belts`, `Shoes`, `Jackets`, `Accessories`. |
 | `price` | Text (short) | Free-form so we can write "$240" or "POA". |
 | `tag` | Enum (optional) | `New`, `Limited`, blank. Renders as the corner badge on the tile. |
 | `image` | Media (single, images) | Required. Drives both the social post and the product tile. |
