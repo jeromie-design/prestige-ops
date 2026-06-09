@@ -16,8 +16,19 @@ ops.prestigeaccessories.net {
 
 social.prestigeaccessories.net {
     encode zstd gzip
-    # Postiz frontend (Next.js) listens on 4200 inside the container.
-    # It internally proxies /api to the NestJS backend on :3000, so Caddy
-    # should ONLY talk to the frontend port; do not split routes here.
-    reverse_proxy postiz:4200
+
+    # Postiz runs TWO separate services inside one container:
+    #   - NestJS backend on :3000 (serves /api/*, including auth, integrations, posts)
+    #   - Next.js frontend on :4200 (serves the UI)
+    # The frontend does NOT internally proxy /api to the backend, so Caddy has
+    # to route the API path itself; otherwise /api/* hits Next.js and 404s.
+    handle /api/* {
+        reverse_proxy postiz:3000
+    }
+    handle /uploads/* {
+        reverse_proxy postiz:3000
+    }
+    handle {
+        reverse_proxy postiz:4200
+    }
 }
