@@ -104,7 +104,9 @@ services:
       MAIN_URL: ${POSTIZ_PUBLIC_URL}
       FRONTEND_URL: ${POSTIZ_PUBLIC_URL}
       NEXT_PUBLIC_BACKEND_URL: "${POSTIZ_PUBLIC_URL}/api"
-      BACKEND_INTERNAL_URL: "http://postiz:3000"
+      # Backend NestJS listens on :5000 inside the container (confirmed via ss -ltn).
+      # This URL is used by the Next.js frontend for server-side fetches to the backend.
+      BACKEND_INTERNAL_URL: "http://postiz:5000"
       STORAGE_PROVIDER: local
       UPLOAD_DIRECTORY: /uploads
       NEXT_PUBLIC_UPLOAD_DIRECTORY: /uploads
