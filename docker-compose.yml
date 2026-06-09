@@ -77,15 +77,37 @@ services:
     networks:
       - internal
 
+  elasticsearch:
+    # Temporal Standard Visibility (SQL) hardcodes "max 3 Text-type search attributes
+    # per namespace" and Postiz needs more. Elasticsearch as visibility backend lifts
+    # that limit entirely. ES 7.17 is the version the Temporal docs reference for v7
+    # compatibility; xpack security off, single node, modest heap to leave room for
+    # the other services on this t3.medium.
+    image: elasticsearch:7.17.27
+    restart: unless-stopped
+    environment:
+      - cluster.routing.allocation.disk.threshold_enabled=true
+      - cluster.routing.allocation.disk.watermark.low=2gb
+      - cluster.routing.allocation.disk.watermark.high=1gb
+      - cluster.routing.allocation.disk.watermark.flood_stage=512mb
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+      - xpack.security.enabled=false
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
   temporal:
     # Postiz uses Temporal for job scheduling (port 7233).
-    # auto-setup image provisions the temporal/temporal_visibility databases on our shared postgres.
-    #
-    # auto-setup 1.28 valid drivers: mysql8 | postgres12 | postgres12_pgx | cassandra.
-    # postgres12 is the legacy lib/pq driver and the one that hardcodes "max 3 Text
-    # search attributes per namespace" in its visibility-schema setup. postgres12_pgx
-    # is the modern jackc/pgx port; trying it for whether the attribute ceiling is
-    # relaxed there.
+    # auto-setup provisions the temporal/temporal_visibility namespaces on first boot.
+    # We use Postgres for namespace+history (the SQL store) and Elasticsearch for
+    # VISIBILITY, which is what removes the 3-Text-attribute limit Postiz hits.
     image: temporalio/auto-setup:1.28
     restart: unless-stopped
     environment:
@@ -94,8 +116,16 @@ services:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PWD: ${POSTGRES_PASSWORD}
       POSTGRES_SEEDS: postgres
+      # --- ES visibility wiring ---
+      ENABLE_ES: "true"
+      ES_SEEDS: elasticsearch
+      ES_VERSION: v7
+      ES_PORT: "9200"
+      ES_VIS_INDEX: temporal_visibility_v1_dev
     depends_on:
       postgres:
+        condition: service_healthy
+      elasticsearch:
         condition: service_healthy
     networks:
       - internal
@@ -186,6 +216,7 @@ volumes:
   strapi-uploads:
   postiz-uploads:
   postiz-config:
+  elasticsearch-data:
   caddy-data:
   caddy-config:
 
