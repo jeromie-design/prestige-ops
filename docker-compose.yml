@@ -81,16 +81,15 @@ services:
     # Postiz uses Temporal for job scheduling (port 7233).
     # auto-setup image provisions the temporal/temporal_visibility databases on our shared postgres.
     #
-    # IMPORTANT: must use DB=postgres17 (the newer visibility driver), not postgres12.
-    # The postgres12 driver hardcodes a limit of 3 Text-type search attributes per namespace,
-    # and Postiz needs more for its post-status / integration / queue filtering. Backend will
-    # crash in onModuleInit with "cannot have more than 3 search attribute of type Text"
-    # otherwise. postgres17 driver works with any Postgres 12+ engine, including our pg15.
-    # auto-setup:1.28 is the first image that ships the postgres17 driver bundled.
+    # auto-setup 1.28 valid drivers: mysql8 | postgres12 | postgres12_pgx | cassandra.
+    # postgres12 is the legacy lib/pq driver and the one that hardcodes "max 3 Text
+    # search attributes per namespace" in its visibility-schema setup. postgres12_pgx
+    # is the modern jackc/pgx port; trying it for whether the attribute ceiling is
+    # relaxed there.
     image: temporalio/auto-setup:1.28
     restart: unless-stopped
     environment:
-      DB: postgres17
+      DB: postgres12_pgx
       DB_PORT: 5432
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PWD: ${POSTGRES_PASSWORD}
