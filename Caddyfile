@@ -16,5 +16,8 @@ ops.prestigeaccessories.net {
 
 social.prestigeaccessories.net {
     encode zstd gzip
-    reverse_proxy postiz:3000
+    # Postiz frontend (Next.js) listens on 4200 inside the container.
+    # It internally proxies /api to the NestJS backend on :3000, so Caddy
+    # should ONLY talk to the frontend port; do not split routes here.
+    reverse_proxy postiz:4200
 }
