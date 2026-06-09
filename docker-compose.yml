@@ -108,9 +108,11 @@ services:
       STORAGE_PROVIDER: local
       UPLOAD_DIRECTORY: /uploads
       NEXT_PUBLIC_UPLOAD_DIRECTORY: /uploads
-      TEMPORAL_URL: "temporal:7233"
-      TEMPORAL_HOST: temporal
-      TEMPORAL_PORT: "7233"
+      # Postiz reads ONE env var for the Temporal address: TEMPORAL_ADDRESS in host:port form.
+      # The TEMPORAL_URL / TEMPORAL_HOST / TEMPORAL_PORT triple we used to ship here are ignored
+      # by Postiz; setting any of them does not affect connection. Removing to avoid confusion.
+      # Default namespace + no TLS = nothing else to set for self-hosted Temporal on docker net.
+      TEMPORAL_ADDRESS: "temporal:7233"
     volumes:
       - postiz-uploads:/uploads
       - postiz-config:/config
