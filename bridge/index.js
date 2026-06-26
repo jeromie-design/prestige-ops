@@ -60,6 +60,15 @@ const CAPTION_FIELDS = [
   'captionThreads',
   'captionYoutubeTitle',
   'captionYoutubeDescription',
+  // Manual-channel captions: copied to clipboard by Tyler and pasted into native UIs.
+  // FB Marketplace / FB Groups / Whatnot have no useful public API; eBay has one but
+  // the listing schema is structured (separate workstream). Generating clean text for
+  // all of them up front means Tyler never re-writes a caption per platform.
+  'captionMarketplace',
+  'captionFacebookGroup',
+  'captionWhatnot',
+  'ebayTitle',
+  'ebayDescription',
 ];
 
 const BRAND_VOICE_SYSTEM_PROMPT = `You write product copy for Prestige Accessories, a curated boutique selling designer goods (belts, shoes, jackets, and other accessories).
@@ -84,6 +93,13 @@ Per-platform specs:
 - captionThreads: 50-100 words. Conversational but still considered. 2-3 hashtags max.
 - captionYoutubeTitle: <60 chars. Format: "<Brand> <Piece>, <Distinctive Detail>" or similar. Searchable.
 - captionYoutubeDescription: 200-300 words. Longer story. Material origin, finish, presentation, fit/care notes. End with brand/site URL line. No hashtags in body; YouTube uses tags separately.
+
+Manual-channel specs (Tyler pastes these into native apps; no API automation):
+- captionMarketplace: 80-150 words for Facebook Marketplace listing description. Lead with condition + brand + size if known. Then the piece description in brand voice. End with "Inquire via message for measurements or additional photos." Plain text only, no hashtags.
+- captionFacebookGroup: 60-100 words for buy/sell groups. Format: Brand + piece, condition, asking price line, then 2-3 sentence brand-voice description, then "DM to inquire." Plain text, no hashtags. Direct but never aggressive.
+- captionWhatnot: 40-80 words. Punchy for a live show context, like Tyler is holding the piece up to camera. One sensory line, one condition note, one call to bid. No hashtags, no links.
+- ebayTitle: HARD CAP 80 characters. Format: "<Brand> <Model/Piece> <Color> <Size> <Material> <Condition>" with whatever fits. Stuff the title with the words a buyer would actually search. No marketing fluff, no exclamation, no all-caps. Example: "Buscemi Marble Buckle Belt Black Italian Leather Mens 95cm Pre-Owned"
+- ebayDescription: 200-400 words. Plain text or simple HTML. Open with brand + piece. List item specifics by line (Brand, Material, Color, Hardware, Country of origin if known). Then 2-3 paragraphs of considered description in brand voice. Then condition disclosure paragraph (always say "Pre-Owned" or "New with tags" honestly, mention any visible wear). Close with the brand line. NO hashtags. NO em-dashes.
 
 When you call the publish_captions tool, fill every field with a finished caption. No preamble, no labels, no markdown.`;
 
@@ -192,6 +208,11 @@ async function generateAllCaptions(drop) {
         captionThreads: { type: 'string', description: 'Threads post: 50-100 words, conversational, 2-3 hashtags max.' },
         captionYoutubeTitle: { type: 'string', description: 'YouTube video title: under 60 characters, searchable, brand + piece + distinctive detail.' },
         captionYoutubeDescription: { type: 'string', description: 'YouTube description: 200-300 words, longer story, ends with brand/site line.' },
+        captionMarketplace: { type: 'string', description: 'Facebook Marketplace listing description: 80-150 words, condition-first, ends with inquiry CTA.' },
+        captionFacebookGroup: { type: 'string', description: 'Buy/sell group post: 60-100 words, brand + condition + price + brand-voice description + DM CTA.' },
+        captionWhatnot: { type: 'string', description: 'Whatnot live-show line: 40-80 words, punchy, in-the-moment, no hashtags or links.' },
+        ebayTitle: { type: 'string', description: 'eBay listing title: HARD MAX 80 characters, keyword-stuffed, brand + piece + color + size + material + condition.' },
+        ebayDescription: { type: 'string', description: 'eBay listing description: 200-400 words, item specifics as a list then brand-voice paragraphs then honest condition disclosure.' },
       },
       required: CAPTION_FIELDS,
     },
