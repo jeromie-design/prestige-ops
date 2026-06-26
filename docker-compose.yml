@@ -184,6 +184,12 @@ services:
       # Redirect URI: https://social.prestigeaccessories.net/integrations/social/youtube
       YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
       YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
+
+      # Reddit -- designer resale subs are a real audience (r/RepLadies neighbors,
+      # r/LuxuryRepLadies, r/DesignerReps). Free dev app, no review wait.
+      # Redirect URI: https://social.prestigeaccessories.net/integrations/social/reddit
+      REDDIT_CLIENT_ID: ${REDDIT_CLIENT_ID:-}
+      REDDIT_CLIENT_SECRET: ${REDDIT_CLIENT_SECRET:-}
     volumes:
       - postiz-uploads:/uploads
       - postiz-config:/config

@@ -316,6 +316,10 @@ const POSTIZ_CHANNEL_MAP = {
   'pinterest': { field: 'captionPinterest', requiresVideo: false },
   'tiktok': { field: 'captionTikTok', requiresVideo: true },
   'youtube': { field: 'captionYoutubeTitle', requiresVideo: true },
+  // Reddit posts are most natural in the buy/sell community voice (price + condition
+  // + brief description + DM CTA). Reuse the captionFacebookGroup field which is
+  // tuned for that tone, no separate field needed.
+  'reddit': { field: 'captionFacebookGroup', requiresVideo: false },
 };
 
 function postizHeaders() {
