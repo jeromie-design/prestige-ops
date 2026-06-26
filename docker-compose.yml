@@ -215,7 +215,9 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5}
       # Postiz (publish-time social fan-out)
-      POSTIZ_API_URL: "http://postiz:3000/api"
+      # Backend NestJS listens on :5000 inside the container (confirmed via ss -ltn).
+      # Public API routes are mounted under /public/v1 (see /app/apps/backend/dist public.controller).
+      POSTIZ_API_URL: "http://postiz:5000"
       POSTIZ_API_KEY: ${POSTIZ_API_KEY}
       # Site rebuild, Cloudflare deploy hook first, GitHub marker commit as fallback
       CLOUDFLARE_DEPLOY_HOOK_URL: ${CLOUDFLARE_DEPLOY_HOOK_URL}
@@ -223,6 +225,21 @@ services:
       GITHUB_DEPLOY_REPO: ${GITHUB_DEPLOY_REPO:-jeromie-design/prestige-site}
       GITHUB_DEPLOY_BRANCH: ${GITHUB_DEPLOY_BRANCH:-main}
       GITHUB_DEPLOY_MARKER_PATH: ${GITHUB_DEPLOY_MARKER_PATH:-.cloudflare/last-drop.txt}
+      # ----- eBay Sell API -----
+      # See docs/EBAY-INTEGRATION.md for full design + auth flow.
+      # EBAY_ENV switches the bridge between api.sandbox.ebay.com (sandbox) and
+      # api.ebay.com (production). All other vars come from the matching keyset.
+      EBAY_ENV: ${EBAY_ENV:-sandbox}
+      EBAY_APP_ID: ${EBAY_APP_ID:-}
+      EBAY_CERT_ID: ${EBAY_CERT_ID:-}
+      EBAY_DEV_ID: ${EBAY_DEV_ID:-}
+      EBAY_USER_TOKEN: ${EBAY_USER_TOKEN:-}
+      EBAY_REFRESH_TOKEN: ${EBAY_REFRESH_TOKEN:-}
+      EBAY_DEFAULT_SHIPPING_POLICY_ID: ${EBAY_DEFAULT_SHIPPING_POLICY_ID:-}
+      EBAY_DEFAULT_RETURN_POLICY_ID: ${EBAY_DEFAULT_RETURN_POLICY_ID:-}
+      EBAY_DEFAULT_PAYMENT_POLICY_ID: ${EBAY_DEFAULT_PAYMENT_POLICY_ID:-}
+      EBAY_DEFAULT_LOCATION_ZIP: ${EBAY_DEFAULT_LOCATION_ZIP:-}
+      EBAY_DEFAULT_CATEGORY_ID: ${EBAY_DEFAULT_CATEGORY_ID:-2993}
     networks:
       - internal
 

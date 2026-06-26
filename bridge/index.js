@@ -266,6 +266,8 @@ app.post('/strapi/publish', async (req, res) => {
   }
 
   const drop = event.entry;
+  // Always return 200 even on partial failure; Strapi will otherwise retry the
+  // webhook indefinitely and we'd double-post on every retry.
   const results = await Promise.allSettled([
     scheduleSocialPosts(drop),
     triggerSiteRebuild(drop),
@@ -282,25 +284,209 @@ app.post('/strapi/publish', async (req, res) => {
   });
 });
 
-async function scheduleSocialPosts(drop) {
-  if (!POSTIZ_API_URL || !POSTIZ_API_KEY) {
-    throw new Error('Postiz not configured');
+// -----------------------------------------------------------------------------
+// Postiz fan-out
+//
+// For each connected Postiz integration (Instagram, FB Page, Threads, Pinterest,
+// etc.), pick the right per-platform caption field on the Drop and create one
+// scheduled Postiz post with the Drop image. Channels without a caption value
+// or that need video without a video are skipped.
+//
+// Postiz public API (confirmed via grep inside the running container against
+// /app/apps/backend/dist):
+//   GET  /public/v1/integrations          -> [{ id, name, identifier, ... }]
+//   POST /public/v1/upload-from-url       <- { url } -> { id, path }
+//   POST /public/v1/posts                 <- {
+//          type: 'now' | 'schedule',
+//          date: ISO,
+//          shortLink: bool,
+//          posts: [{ integration: { id }, value: [{ content, image: [{ id, path }] }] }]
+//        }
+// If the actual shape differs in any deployed Postiz version, the per-channel
+// try/catch below will log and continue rather than aborting the whole fan-out.
+// -----------------------------------------------------------------------------
+
+// identifier -> { field, requiresVideo }
+// requiresVideo channels are skipped until we have a video pipeline.
+const POSTIZ_CHANNEL_MAP = {
+  'instagram-standalone': { field: 'captionInstagram', requiresVideo: false },
+  'instagram': { field: 'captionInstagram', requiresVideo: false },
+  'facebook': { field: 'socialCopy', requiresVideo: false },
+  'threads': { field: 'captionThreads', requiresVideo: false },
+  'pinterest': { field: 'captionPinterest', requiresVideo: false },
+  'tiktok': { field: 'captionTikTok', requiresVideo: true },
+  'youtube': { field: 'captionYoutubeTitle', requiresVideo: true },
+};
+
+function postizHeaders() {
+  return {
+    'Content-Type': 'application/json',
+    // Postiz public API uses an 'Authorization' API-key header.
+    // Some deployments accept the raw key; Bearer prefix is also accepted by the
+    // controller's guard. Send raw for the widest compatibility.
+    'Authorization': POSTIZ_API_KEY,
+  };
+}
+
+async function postizFetch(path, init = {}) {
+  const url = `${POSTIZ_API_URL}${path}`;
+  const res = await fetch(url, {
+    ...init,
+    headers: { ...postizHeaders(), ...(init.headers ?? {}) },
+  });
+  const text = await res.text();
+  let body;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  if (!res.ok) {
+    const snippet = typeof body === 'string' ? body.slice(0, 200) : JSON.stringify(body).slice(0, 200);
+    throw new Error(`postiz ${path} ${res.status}: ${snippet}`);
   }
-  const res = await fetch(`${POSTIZ_API_URL}/posts`, {
+  return body;
+}
+
+async function listPostizIntegrations() {
+  const data = await postizFetch('/public/v1/integrations', { method: 'GET' });
+  // Defensive: some Postiz versions wrap the list under { integrations: [...] }.
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.integrations)) return data.integrations;
+  if (Array.isArray(data?.data)) return data.data;
+  return [];
+}
+
+async function uploadImageToPostiz(imageUrl) {
+  // POST /public/v1/upload-from-url accepts { url } and returns { id, path }.
+  return postizFetch('/public/v1/upload-from-url', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${POSTIZ_API_KEY}`,
-    },
+    body: JSON.stringify({ url: imageUrl }),
+  });
+}
+
+async function createPostizPost({ integrationId, content, imageRef, when }) {
+  const scheduleType = when ? 'schedule' : 'now';
+  const date = (when ?? new Date()).toISOString();
+  const value = [{
+    content,
+    image: imageRef ? [imageRef] : [],
+  }];
+  return postizFetch('/public/v1/posts', {
+    method: 'POST',
     body: JSON.stringify({
-      caption: drop.socialCopy ?? drop.name,
-      mediaUrl: drop.image?.url,
-      channels: drop.channels ?? [],
-      scheduledAt: drop.scheduledAt ?? null,
+      type: scheduleType,
+      date,
+      shortLink: false,
+      posts: [{ integration: { id: integrationId }, value }],
     }),
   });
-  if (!res.ok) throw new Error(`postiz ${res.status}: ${await res.text()}`);
-  return res.json();
+}
+
+async function scheduleSocialPosts(drop) {
+  if (!POSTIZ_API_URL || !POSTIZ_API_KEY) {
+    return { skipped: true, reason: 'Postiz not configured' };
+  }
+  if (!drop) {
+    return { skipped: true, reason: 'no drop payload' };
+  }
+
+  const slug = drop.slug ?? drop.id ?? 'unknown';
+
+  // Resolve the public image URL up front. If the Drop has no image we can still
+  // try text-only posts on the platforms that accept them, but most social posts
+  // are image-driven; log and continue.
+  const imagePath = drop?.image?.url ?? null;
+  const fullImageUrl = imagePath
+    ? (imagePath.startsWith('http') ? imagePath : `${STRAPI_PUBLIC_URL}${imagePath}`)
+    : null;
+
+  let integrations;
+  try {
+    integrations = await listPostizIntegrations();
+  } catch (err) {
+    console.error(`[bridge] postiz list integrations failed: ${err.message}`);
+    return { ok: false, error: err.message, scheduled: [], skipped: [] };
+  }
+
+  if (!integrations.length) {
+    console.log(`[bridge] drop=${slug} postiz has no connected integrations; nothing to fan out`);
+    return { ok: true, scheduled: [], skipped: [], reason: 'no connected channels' };
+  }
+
+  // Upload image once, reuse the same Postiz media ref across every post.
+  let imageRef = null;
+  if (fullImageUrl) {
+    try {
+      const uploaded = await uploadImageToPostiz(fullImageUrl);
+      if (uploaded?.id && uploaded?.path) {
+        imageRef = { id: uploaded.id, path: uploaded.path };
+      } else {
+        console.warn(`[bridge] postiz upload-from-url returned unexpected shape: ${JSON.stringify(uploaded).slice(0, 200)}`);
+      }
+    } catch (err) {
+      console.error(`[bridge] postiz image upload failed for drop=${slug}: ${err.message}`);
+      // Continue without image; posts that need media will fail per-channel and be logged.
+    }
+  }
+
+  // Resolve schedule time. If the Drop carries a scheduledAt in the future, honor it; else 'now'.
+  let when = null;
+  if (drop.scheduledAt) {
+    const parsed = new Date(drop.scheduledAt);
+    if (!Number.isNaN(parsed.getTime()) && parsed.getTime() > Date.now()) {
+      when = parsed;
+    }
+  }
+
+  const scheduled = [];
+  const skipped = [];
+
+  for (const integration of integrations) {
+    const identifier = integration?.identifier ?? integration?.providerIdentifier;
+    const id = integration?.id;
+    const name = integration?.name ?? identifier ?? id;
+
+    if (!id || !identifier) {
+      skipped.push({ name, reason: 'integration missing id/identifier' });
+      continue;
+    }
+
+    const mapping = POSTIZ_CHANNEL_MAP[identifier];
+    if (!mapping) {
+      skipped.push({ identifier, name, reason: 'no caption mapping' });
+      continue;
+    }
+
+    if (mapping.requiresVideo) {
+      skipped.push({ identifier, name, reason: 'requires video, not supported yet' });
+      continue;
+    }
+
+    let content = drop[mapping.field];
+    if (typeof content === 'string') content = content.trim();
+    if (!content) {
+      // Fallback chain: per-platform field -> socialCopy -> name. Avoid posting an empty caption.
+      content = (drop.socialCopy && drop.socialCopy.trim()) || drop.name;
+    }
+    if (!content) {
+      skipped.push({ identifier, name, reason: 'no caption available' });
+      continue;
+    }
+
+    try {
+      const result = await createPostizPost({
+        integrationId: id,
+        content,
+        imageRef,
+        when,
+      });
+      const postId = result?.id ?? result?.[0]?.id ?? result?.posts?.[0]?.id ?? null;
+      console.log(`[bridge] drop=${slug} postiz scheduled ${identifier} (${name}) id=${postId} when=${when ? when.toISOString() : 'now'}`);
+      scheduled.push({ identifier, name, id: postId, when: when ? when.toISOString() : 'now' });
+    } catch (err) {
+      console.error(`[bridge] drop=${slug} postiz post failed for ${identifier}: ${err.message}`);
+      skipped.push({ identifier, name, reason: `error: ${err.message}` });
+    }
+  }
+
+  return { ok: true, scheduled, skipped };
 }
 
 async function triggerSiteRebuild(drop) {

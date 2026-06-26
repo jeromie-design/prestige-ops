@@ -91,6 +91,57 @@
     "ebayDescription": {
       "type": "text"
     },
+    "condition": {
+      "type": "enumeration",
+      "enum": [
+        "New",
+        "New with tags",
+        "Pre-Owned",
+        "Refurbished",
+        "For parts"
+      ]
+    },
+    "ebaySize": {
+      "type": "string"
+    },
+    "ebayColor": {
+      "type": "string"
+    },
+    "ebayMaterial": {
+      "type": "string"
+    },
+    "ebayItemLocationZip": {
+      "type": "string"
+    },
+    "ebayShippingPolicyId": {
+      "type": "string"
+    },
+    "ebayReturnPolicyId": {
+      "type": "string"
+    },
+    "ebayPaymentPolicyId": {
+      "type": "string"
+    },
+    "ebayCategoryId": {
+      "type": "string"
+    },
+    "ebayInventoryQuantity": {
+      "type": "integer",
+      "default": 1
+    },
+    "ebayListingState": {
+      "type": "enumeration",
+      "enum": [
+        "draft",
+        "live",
+        "sold",
+        "withdrawn"
+      ],
+      "default": "draft"
+    },
+    "ebayListingId": {
+      "type": "string"
+    },
     "channels": {
       "type": "json"
     },
