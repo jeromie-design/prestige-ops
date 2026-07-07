@@ -221,9 +221,14 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-5}
       # Postiz (publish-time social fan-out)
-      # Backend NestJS listens on :5000 inside the container (confirmed via ss -ltn).
-      # Public API routes are mounted under /public/v1 (see /app/apps/backend/dist public.controller).
-      POSTIZ_API_URL: "http://postiz:5000"
+      # Backend NestJS listens on :3000 inside the container. Port :5000 is a
+      # different service (nginx-like router that falls through to the Next.js
+      # frontend for unknown paths), so /public/v1/* on :5000 returns HTML
+      # login pages instead of the API. Confirmed via node fetch tests inside
+      # the postiz container: :3000 with a valid API key returns JSON, :5000
+      # returns Next.js HTML. API key must be a real one generated in the
+      # Postiz UI (Settings -> API), not a random hex string in .env.
+      POSTIZ_API_URL: "http://postiz:3000"
       POSTIZ_API_KEY: ${POSTIZ_API_KEY}
       # Site rebuild, Cloudflare deploy hook first, GitHub marker commit as fallback
       CLOUDFLARE_DEPLOY_HOOK_URL: ${CLOUDFLARE_DEPLOY_HOOK_URL}
