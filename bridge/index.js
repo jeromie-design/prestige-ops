@@ -47,6 +47,22 @@ const {
   GITHUB_DEPLOY_REPO = 'jeromie-design/prestige-site',
   GITHUB_DEPLOY_BRANCH = 'main',
   GITHUB_DEPLOY_MARKER_PATH = '.cloudflare/last-drop.txt',
+
+  // eBay Sell API. Full design in docs/EBAY-INTEGRATION.md.
+  // The whole integration is behind an if-configured guard, if EBAY_APP_ID or
+  // EBAY_REFRESH_TOKEN are unset the eBay path is skipped and the rest of
+  // /strapi/publish still runs as before.
+  EBAY_ENV = 'sandbox',
+  EBAY_APP_ID,
+  EBAY_CERT_ID,
+  EBAY_DEV_ID,
+  EBAY_USER_TOKEN,
+  EBAY_REFRESH_TOKEN,
+  EBAY_DEFAULT_SHIPPING_POLICY_ID,
+  EBAY_DEFAULT_RETURN_POLICY_ID,
+  EBAY_DEFAULT_PAYMENT_POLICY_ID,
+  EBAY_DEFAULT_LOCATION_ZIP,
+  EBAY_DEFAULT_CATEGORY_ID = '2993',
 } = process.env;
 
 const anthropic = ANTHROPIC_API_KEY ? new Anthropic({ apiKey: ANTHROPIC_API_KEY }) : null;
@@ -118,6 +134,7 @@ app.get('/health', (_req, res) => res.json({
     postiz: Boolean(POSTIZ_API_URL && POSTIZ_API_KEY),
     cloudflare_hook: Boolean(CLOUDFLARE_DEPLOY_HOOK_URL),
     github_fallback: Boolean(GITHUB_DEPLOY_TOKEN),
+    ebay: Boolean(EBAY_APP_ID && EBAY_REFRESH_TOKEN),
   },
 }));
 
@@ -275,12 +292,37 @@ app.post('/strapi/publish', async (req, res) => {
 
   const social = summarize(results[0]);
   const rebuild = summarize(results[1]);
-  console.log(`[bridge] drop=${drop?.slug ?? drop?.id} social=${JSON.stringify(social)} rebuild=${JSON.stringify(rebuild)}`);
+
+  // eBay listing creation runs after Postiz fan-out. Independent of Postiz +
+  // Cloudflare success, if either of those errored we still want the item live
+  // on eBay so the sale channel is not gated on a social hiccup.
+  let ebay;
+  try {
+    ebay = await publishDropToEbay(drop);
+    if (ebay?.ok && ebay.listingId) {
+      // Write listing state back to Strapi so Tyler sees "live" in the admin.
+      try {
+        await patchDrop(drop?.documentId ?? drop?.id, {
+          ebayListingState: 'live',
+          ebayListingId: String(ebay.listingId),
+        });
+      } catch (err) {
+        console.error(`[bridge] drop=${drop?.slug ?? drop?.id} ebay patch-back failed: ${err.message}`);
+      }
+    }
+  } catch (err) {
+    // publishDropToEbay is written not to throw, but belt-and-suspenders.
+    console.error(`[bridge] drop=${drop?.slug ?? drop?.id} ebay unexpected throw: ${err.message}`);
+    ebay = { ok: false, error: err.message };
+  }
+
+  console.log(`[bridge] drop=${drop?.slug ?? drop?.id} social=${JSON.stringify(social)} rebuild=${JSON.stringify(rebuild)} ebay=${JSON.stringify(ebay)}`);
 
   res.json({
     drop: drop?.slug ?? drop?.id,
     social,
     rebuild,
+    ebay,
   });
 });
 
