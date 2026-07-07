@@ -150,6 +150,12 @@ services:
       # Default namespace + no TLS = nothing else to set for self-hosted Temporal on docker net.
       TEMPORAL_ADDRESS: "temporal:7233"
 
+      # Public API auth. Postiz's /public/v1/* endpoints check the incoming
+      # Authorization header against process.env.AGENT_API_KEY. The bridge
+      # sends whatever value is in its own POSTIZ_API_KEY, so the two must
+      # match. Simplest: reuse POSTIZ_API_KEY on both sides.
+      AGENT_API_KEY: ${POSTIZ_API_KEY}
+
       # --- Social platform OAuth credentials ---
       # Exact env var NAMES confirmed by grep inside the running Postiz container:
       #   docker compose exec postiz sh -c 'grep -rEo "process\.env\.[A-Z_]+(CLIENT_ID|CLIENT_SECRET|APP_ID|APP_SECRET|API_KEY|API_SECRET)" /app/apps/backend/dist | sort -u'
