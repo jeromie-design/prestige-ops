@@ -361,7 +361,17 @@ const POSTIZ_CHANNEL_MAP = {
   // automatically based on the media type we upload. Flip requiresVideo false
   // so we actually attempt the post; if it fails inside Postiz we surface the
   // error rather than silently skipping.
-  'tiktok': { field: 'captionTikTok', requiresVideo: false },
+  // TikTok Sandbox forces all posts to private regardless of the requested
+  // privacy_level. In Production the accepted values are:
+  //   PUBLIC_TO_EVERYONE, MUTUAL_FOLLOW_FRIENDS, FOLLOWER_OF_CREATOR, SELF_ONLY
+  // We ship SELF_ONLY explicitly so Sandbox test posts land as private drafts
+  // in the account owner's TikTok Studio, and so Production posts remain
+  // private until Tyler flips the value here.
+  'tiktok': {
+    field: 'captionTikTok',
+    requiresVideo: false,
+    settings: { privacy_level: 'SELF_ONLY' },
+  },
   'youtube': { field: 'captionYoutubeTitle', requiresVideo: true },
   // Reddit posts are most natural in the buy/sell community voice (price + condition
   // + brief description + DM CTA). Reuse the captionFacebookGroup field which is
@@ -412,20 +422,30 @@ async function uploadImageToPostiz(imageUrl) {
   });
 }
 
-async function createPostizPost({ integrationId, content, imageRef, when }) {
+async function createPostizPost({ integrationId, content, imageRef, when, settings }) {
   const scheduleType = when ? 'schedule' : 'now';
   const date = (when ?? new Date()).toISOString();
   const value = [{
     content,
     image: imageRef ? [imageRef] : [],
   }];
+  const postEntry = {
+    integration: { id: integrationId },
+    value,
+    // Empty tags array is required by Postiz's DTO validation even when we
+    // are not tagging anyone; sending null triggers a 400.
+    tags: [],
+  };
+  if (settings && Object.keys(settings).length > 0) {
+    postEntry.settings = settings;
+  }
   return postizFetch('/public/v1/posts', {
     method: 'POST',
     body: JSON.stringify({
       type: scheduleType,
       date,
       shortLink: false,
-      posts: [{ integration: { id: integrationId }, value }],
+      posts: [postEntry],
     }),
   });
 }
@@ -527,6 +547,7 @@ async function scheduleSocialPosts(drop) {
         content,
         imageRef,
         when,
+        settings: mapping.settings,
       });
       const postId = result?.id ?? result?.[0]?.id ?? result?.posts?.[0]?.id ?? null;
       console.log(`[bridge] drop=${slug} postiz scheduled ${identifier} (${name}) id=${postId} when=${when ? when.toISOString() : 'now'}`);
