@@ -367,10 +367,25 @@ const POSTIZ_CHANNEL_MAP = {
   // We ship SELF_ONLY explicitly so Sandbox test posts land as private drafts
   // in the account owner's TikTok Studio, and so Production posts remain
   // private until Tyler flips the value here.
+  // Postiz's TikTokDto validates all ten of the fields below; sending fewer
+  // yields a 400 with "must be a boolean value" errors. We pass a function
+  // (not a plain object) so we can slice the drop name into TikTok's 90-char
+  // title cap without touching the rest of the fan-out logic.
   'tiktok': {
     field: 'captionTikTok',
     requiresVideo: false,
-    settings: { privacy_level: 'SELF_ONLY' },
+    buildSettings: (drop) => ({
+      title: (drop && drop.name ? String(drop.name) : '').slice(0, 90),
+      privacy_level: 'SELF_ONLY',
+      duet: false,
+      stitch: false,
+      comment: false,
+      autoAddMusic: 'no',
+      brand_content_toggle: false,
+      video_made_with_ai: false,
+      brand_organic_toggle: false,
+      content_posting_method: 'DIRECT_POST',
+    }),
   },
   'youtube': { field: 'captionYoutubeTitle', requiresVideo: true },
   // Reddit posts are most natural in the buy/sell community voice (price + condition
@@ -541,13 +556,19 @@ async function scheduleSocialPosts(drop) {
       continue;
     }
 
+    // Per-platform settings can be either a static object on mapping.settings
+    // or a function on mapping.buildSettings(drop) when values need to derive
+    // from the drop (TikTok's title from drop.name, for example).
+    const settings = typeof mapping.buildSettings === 'function'
+      ? mapping.buildSettings(drop)
+      : mapping.settings;
     try {
       const result = await createPostizPost({
         integrationId: id,
         content,
         imageRef,
         when,
-        settings: mapping.settings,
+        settings,
       });
       const postId = result?.id ?? result?.[0]?.id ?? result?.posts?.[0]?.id ?? null;
       console.log(`[bridge] drop=${slug} postiz scheduled ${identifier} (${name}) id=${postId} when=${when ? when.toISOString() : 'now'}`);
