@@ -356,7 +356,12 @@ const POSTIZ_CHANNEL_MAP = {
   'facebook': { field: 'socialCopy', requiresVideo: false },
   'threads': { field: 'captionThreads', requiresVideo: false },
   'pinterest': { field: 'captionPinterest', requiresVideo: false },
-  'tiktok': { field: 'captionTikTok', requiresVideo: true },
+  // TikTok supports photo carousels via the Content Posting API's PHOTO media
+  // type (rides on video.publish scope). Postiz handles the mode selection
+  // automatically based on the media type we upload. Flip requiresVideo false
+  // so we actually attempt the post; if it fails inside Postiz we surface the
+  // error rather than silently skipping.
+  'tiktok': { field: 'captionTikTok', requiresVideo: false },
   'youtube': { field: 'captionYoutubeTitle', requiresVideo: true },
   // Reddit posts are most natural in the buy/sell community voice (price + condition
   // + brief description + DM CTA). Reuse the captionFacebookGroup field which is
