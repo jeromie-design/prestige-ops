@@ -591,7 +591,304 @@ function summarize(settled) {
     : { ok: false, error: settled.reason?.message ?? String(settled.reason) };
 }
 
+// -----------------------------------------------------------------------------
+// eBay Sell API integration
+//
+// Full design + auth flow: docs/EBAY-INTEGRATION.md.
+// Three-call dance per Drop publish:
+//   1. PUT  /sell/inventory/v1/inventory_item/{sku}      (create/update product)
+//   2. POST /sell/inventory/v1/offer                     (attach price + policies)
+//   3. POST /sell/inventory/v1/offer/{offerId}/publish/  (flip live, get listingId)
+//
+// Token refresh uses the long-lived EBAY_REFRESH_TOKEN in .env. Access token is
+// cached in-process for ~2h, refreshed on demand.
+//
+// Merchant location "prestige_default" is bootstrapped at startup (once) if the
+// eBay env vars are present. eBay requires at least one merchant location key
+// on every offer.
+//
+// Everything here is guarded by if-configured checks. If EBAY_APP_ID or
+// EBAY_REFRESH_TOKEN are unset, the module logs and returns skip results so
+// the rest of /strapi/publish is not blocked.
+// -----------------------------------------------------------------------------
+
+const EBAY_MERCHANT_LOCATION_KEY = 'prestige_default';
+const EBAY_INVENTORY_SCOPE = 'https://api.ebay.com/oauth/api_scope/sell.inventory';
+
+// Access-token cache. Refresh when missing or when within 60s of expiry.
+let ebayAccessToken = null;
+let ebayAccessTokenExpiresAt = 0; // epoch ms
+
+function ebayBaseUrl() {
+  return EBAY_ENV === 'production'
+    ? 'https://api.ebay.com'
+    : 'https://api.sandbox.ebay.com';
+}
+
+function ebayAuthUrl() {
+  return EBAY_ENV === 'production'
+    ? 'https://api.ebay.com/identity/v1/oauth2/token'
+    : 'https://api.sandbox.ebay.com/identity/v1/oauth2/token';
+}
+
+async function refreshEbayUserToken() {
+  if (!EBAY_APP_ID || !EBAY_CERT_ID || !EBAY_REFRESH_TOKEN) {
+    console.warn('[bridge][ebay] refresh skipped, missing EBAY_APP_ID / EBAY_CERT_ID / EBAY_REFRESH_TOKEN');
+    return null;
+  }
+  const basic = Buffer.from(`${EBAY_APP_ID}:${EBAY_CERT_ID}`).toString('base64');
+  const body = new URLSearchParams({
+    grant_type: 'refresh_token',
+    refresh_token: EBAY_REFRESH_TOKEN,
+    scope: EBAY_INVENTORY_SCOPE,
+  }).toString();
+  try {
+    const res = await fetch(ebayAuthUrl(), {
+      method: 'POST',
+      headers: {
+        'Authorization': `Basic ${basic}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
+    });
+    const text = await res.text();
+    let json;
+    try { json = text ? JSON.parse(text) : null; } catch { json = null; }
+    if (!res.ok || !json?.access_token) {
+      const snippet = (text ?? '').slice(0, 300);
+      console.error(`[bridge][ebay] token refresh failed ${res.status}: ${snippet}`);
+      return null;
+    }
+    ebayAccessToken = json.access_token;
+    const expiresInSec = Number(json.expires_in) || 7200;
+    ebayAccessTokenExpiresAt = Date.now() + (expiresInSec * 1000) - 60_000;
+    if (json.refresh_token && json.refresh_token !== EBAY_REFRESH_TOKEN) {
+      console.warn('[bridge][ebay] refresh_token was rotated by eBay, update EBAY_REFRESH_TOKEN in .env');
+    }
+    console.log(`[bridge][ebay] access token refreshed, valid for ${expiresInSec}s (env=${EBAY_ENV})`);
+    return ebayAccessToken;
+  } catch (err) {
+    console.error(`[bridge][ebay] token refresh threw: ${err.message}`);
+    return null;
+  }
+}
+
+async function ensureEbayAccessToken() {
+  if (ebayAccessToken && Date.now() < ebayAccessTokenExpiresAt) return ebayAccessToken;
+  return refreshEbayUserToken();
+}
+
+async function ebayHeaders() {
+  await ensureEbayAccessToken();
+  return {
+    'Authorization': `Bearer ${ebayAccessToken}`,
+    'Content-Type': 'application/json',
+    'Content-Language': 'en-US',
+  };
+}
+
+// eBay Sell Inventory API ConditionEnum, as strings (not the legacy numeric
+// codes used by the Trading API). "New with tags" is not a distinct Inventory
+// API value for most categories, it maps to NEW. Refurbished maps to the
+// generic SELLER_REFURBISHED bucket. Pre-owned resale designer goods go under
+// USED_EXCELLENT since Tyler curates to that quality bar.
+function mapCondition(strapiCondition) {
+  switch ((strapiCondition ?? '').trim()) {
+    case 'New':               return 'NEW';
+    case 'New with tags':     return 'NEW_WITH_TAGS';
+    case 'Pre-Owned':         return 'USED_EXCELLENT';
+    case 'Refurbished':       return 'SELLER_REFURBISHED';
+    case 'For parts':         return 'FOR_PARTS_OR_NOT_WORKING';
+    default:                  return 'USED_EXCELLENT';
+  }
+}
+
+function firstWord(str) {
+  if (!str || typeof str !== 'string') return '';
+  const trimmed = str.trim();
+  if (!trimmed) return '';
+  return trimmed.split(/\s+/)[0];
+}
+
+function numericPrice(priceString) {
+  if (priceString == null) return '0.00';
+  const raw = String(priceString).replace(/[^0-9.]/g, '');
+  const num = Number.parseFloat(raw);
+  if (!Number.isFinite(num)) return '0.00';
+  return num.toFixed(2);
+}
+
+function publicImageUrl(image) {
+  if (!image) return null;
+  // Strapi payload shape can be a media object ({url}) or a raw path string.
+  const path = typeof image === 'string' ? image : (image.url ?? image.formats?.large?.url ?? null);
+  if (!path) return null;
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  return `${STRAPI_PUBLIC_URL}${path.startsWith('/') ? '' : '/'}${path}`;
+}
+
+async function ebayApiFetch(path, init = {}) {
+  const url = `${ebayBaseUrl()}${path}`;
+  const headers = { ...(await ebayHeaders()), ...(init.headers ?? {}) };
+  const res = await fetch(url, { ...init, headers });
+  const text = await res.text();
+  let body;
+  try { body = text ? JSON.parse(text) : null; } catch { body = text; }
+  return { ok: res.ok, status: res.status, body, rawText: text };
+}
+
+async function ensureEbayMerchantLocation() {
+  if (!EBAY_APP_ID || !EBAY_REFRESH_TOKEN) {
+    console.log('[bridge][ebay] merchant location bootstrap skipped, eBay not configured');
+    return { skipped: 'not configured' };
+  }
+  if (!EBAY_DEFAULT_LOCATION_ZIP) {
+    console.warn('[bridge][ebay] merchant location bootstrap skipped, EBAY_DEFAULT_LOCATION_ZIP unset');
+    return { skipped: 'no default zip' };
+  }
+  const token = await ensureEbayAccessToken();
+  if (!token) {
+    console.warn('[bridge][ebay] merchant location bootstrap skipped, no access token');
+    return { skipped: 'no access token' };
+  }
+  const body = {
+    location: {
+      address: {
+        postalCode: EBAY_DEFAULT_LOCATION_ZIP,
+        country: 'US',
+      },
+    },
+    name: 'Prestige Accessories',
+    merchantLocationStatus: 'ENABLED',
+    locationTypes: ['WAREHOUSE'],
+  };
+  try {
+    const result = await ebayApiFetch(`/sell/inventory/v1/location/${EBAY_MERCHANT_LOCATION_KEY}`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    // 204 on create. 409 (conflict) means the location already exists, treat as success.
+    if (result.ok || result.status === 204 || result.status === 409) {
+      console.log(`[bridge][ebay] merchant location "${EBAY_MERCHANT_LOCATION_KEY}" ready (status=${result.status})`);
+      return { ok: true, status: result.status };
+    }
+    const snippet = typeof result.body === 'string' ? result.body.slice(0, 300) : JSON.stringify(result.body).slice(0, 300);
+    console.error(`[bridge][ebay] merchant location bootstrap failed ${result.status}: ${snippet}`);
+    return { ok: false, status: result.status, error: snippet };
+  } catch (err) {
+    console.error(`[bridge][ebay] merchant location bootstrap threw: ${err.message}`);
+    return { ok: false, error: err.message };
+  }
+}
+
+async function publishDropToEbay(drop) {
+  if (!EBAY_APP_ID || !EBAY_REFRESH_TOKEN) {
+    return { skipped: 'ebay not configured' };
+  }
+  if (!drop) {
+    return { skipped: 'no drop payload' };
+  }
+  const sku = drop.slug;
+  if (!sku) {
+    return { skipped: 'drop has no slug (required as SKU)' };
+  }
+
+  const token = await ensureEbayAccessToken();
+  if (!token) {
+    return { ok: false, step: 'auth', error: 'could not obtain access token' };
+  }
+
+  const imageUrl = publicImageUrl(drop.image);
+  const imageUrls = imageUrl ? [imageUrl] : [];
+
+  // Step 1, create or replace the inventory item.
+  const inventoryBody = {
+    product: {
+      title: drop.ebayTitle || drop.name || sku,
+      description: drop.ebayDescription || drop.socialCopy || drop.name || '',
+      aspects: {
+        Brand:    [firstWord(drop.name) || 'Prestige'],
+        Color:    [drop.ebayColor || 'Unspecified'],
+        Size:     [drop.ebaySize || 'One Size'],
+        Material: [drop.ebayMaterial || 'Unspecified'],
+      },
+      imageUrls,
+    },
+    condition: mapCondition(drop.condition),
+    availability: {
+      shipToLocationAvailability: {
+        quantity: Number(drop.ebayInventoryQuantity) || 1,
+      },
+    },
+  };
+
+  const step1 = await ebayApiFetch(`/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`, {
+    method: 'PUT',
+    body: JSON.stringify(inventoryBody),
+  });
+  if (!step1.ok && step1.status !== 204) {
+    const snippet = typeof step1.body === 'string' ? step1.body.slice(0, 300) : JSON.stringify(step1.body).slice(0, 300);
+    console.error(`[bridge][ebay] createOrReplaceInventoryItem ${step1.status}: ${snippet}`);
+    return { ok: false, step: 'inventory_item', status: step1.status, error: snippet };
+  }
+
+  // Step 2, create the offer.
+  const offerBody = {
+    sku,
+    marketplaceId: 'EBAY_US',
+    format: 'FIXED_PRICE',
+    availableQuantity: Number(drop.ebayInventoryQuantity) || 1,
+    pricingSummary: {
+      price: {
+        value: numericPrice(drop.price),
+        currency: 'USD',
+      },
+    },
+    categoryId: String(drop.ebayCategoryId || EBAY_DEFAULT_CATEGORY_ID),
+    merchantLocationKey: EBAY_MERCHANT_LOCATION_KEY,
+    listingPolicies: {
+      fulfillmentPolicyId: drop.ebayShippingPolicyId || EBAY_DEFAULT_SHIPPING_POLICY_ID,
+      paymentPolicyId:     drop.ebayPaymentPolicyId  || EBAY_DEFAULT_PAYMENT_POLICY_ID,
+      returnPolicyId:      drop.ebayReturnPolicyId   || EBAY_DEFAULT_RETURN_POLICY_ID,
+    },
+    listingDescription: drop.ebayDescription || drop.socialCopy || drop.name || '',
+  };
+
+  const step2 = await ebayApiFetch('/sell/inventory/v1/offer', {
+    method: 'POST',
+    body: JSON.stringify(offerBody),
+  });
+  if (!step2.ok) {
+    const snippet = typeof step2.body === 'string' ? step2.body.slice(0, 300) : JSON.stringify(step2.body).slice(0, 300);
+    console.error(`[bridge][ebay] createOffer ${step2.status}: ${snippet}`);
+    return { ok: false, step: 'offer', status: step2.status, error: snippet };
+  }
+  const offerId = step2.body?.offerId;
+  if (!offerId) {
+    return { ok: false, step: 'offer', error: 'createOffer returned no offerId' };
+  }
+
+  // Step 3, publish the offer, flip live.
+  const step3 = await ebayApiFetch(`/sell/inventory/v1/offer/${encodeURIComponent(offerId)}/publish/`, {
+    method: 'POST',
+  });
+  if (!step3.ok) {
+    const snippet = typeof step3.body === 'string' ? step3.body.slice(0, 300) : JSON.stringify(step3.body).slice(0, 300);
+    console.error(`[bridge][ebay] publishOffer ${step3.status}: ${snippet}`);
+    return { ok: false, step: 'publish', status: step3.status, error: snippet, offerId };
+  }
+  const listingId = step3.body?.listingId;
+  console.log(`[bridge][ebay] drop=${sku} listing live, listingId=${listingId} offerId=${offerId}`);
+  return { ok: true, listingId, offerId };
+}
+
 app.listen(PORT, () => {
   console.log(`bridge listening on :${PORT}`);
-  console.log(`features: ai_copy=${Boolean(anthropic && STRAPI_BRIDGE_TOKEN)} postiz=${Boolean(POSTIZ_API_URL && POSTIZ_API_KEY)} cloudflare_hook=${Boolean(CLOUDFLARE_DEPLOY_HOOK_URL)}`);
+  console.log(`features: ai_copy=${Boolean(anthropic && STRAPI_BRIDGE_TOKEN)} postiz=${Boolean(POSTIZ_API_URL && POSTIZ_API_KEY)} cloudflare_hook=${Boolean(CLOUDFLARE_DEPLOY_HOOK_URL)} ebay=${Boolean(EBAY_APP_ID && EBAY_REFRESH_TOKEN)}`);
+  // Best-effort merchant location bootstrap at startup. Never crashes the process.
+  if (EBAY_APP_ID && EBAY_REFRESH_TOKEN) {
+    ensureEbayMerchantLocation()
+      .then(r => console.log(`[bridge][ebay] merchant location bootstrap result: ${JSON.stringify(r)}`))
+      .catch(err => console.error(`[bridge][ebay] merchant location bootstrap error: ${err.message}`));
+  }
 });
