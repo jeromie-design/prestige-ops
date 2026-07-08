@@ -392,14 +392,61 @@ app.post('/strapi/publish', async (req, res) => {
 // try/catch below will log and continue rather than aborting the whole fan-out.
 // -----------------------------------------------------------------------------
 
-// identifier -> { field, requiresVideo }
-// requiresVideo channels are skipped until we have a video pipeline.
+// identifier -> {
+//   field:            caption field on the Drop to send as post content.
+//   requiresVideo:    true means skip until we have a video pipeline.
+//   maxContentLength: hard cap the caption at N chars before posting
+//                     (X: 280, Bluesky: 300, Mastodon: 500). Truncated with
+//                     a trailing period, no em-dashes.
+//   note:             human-readable note surfaced through /health (currently
+//                     latent) so Tyler sees per-channel gotchas without
+//                     spelunking through this file.
+//   buildSettings(drop): return the platform-specific settings object Postiz
+//                        expects for that provider's DTO. Return null to
+//                        signal "cannot post without more config, skip this
+//                        channel this run". Used for channels whose Postiz
+//                        DTO requires a per-account id (Pinterest board,
+//                        Discord/Slack channel, Whop company/experience,
+//                        etc.) that we source from env vars.
+//   settings:         static settings object, alternative to buildSettings.
+// If neither settings nor buildSettings is provided, an empty {} is sent,
+// which is correct for providers whose DTO is empty or whose fields are all
+// optional (Facebook, Threads, Twitch, Kick, Tumblr, GMB, Bluesky, Mastodon,
+// Telegram, Nostr, VK).
 const POSTIZ_CHANNEL_MAP = {
-  'instagram-standalone': { field: 'captionInstagram', requiresVideo: false },
-  'instagram': { field: 'captionInstagram', requiresVideo: false },
-  'facebook': { field: 'socialCopy', requiresVideo: false },
-  'threads': { field: 'captionThreads', requiresVideo: false },
-  'pinterest': { field: 'captionPinterest', requiresVideo: false },
+  // ---- Photo-first, active today ----
+  'instagram-standalone': {
+    field: 'captionInstagram',
+    requiresVideo: false,
+    // InstagramDto requires post_type: 'post' | 'story'. Default to feed post.
+    buildSettings: () => ({ post_type: 'post' }),
+  },
+  'instagram': {
+    field: 'captionInstagram',
+    requiresVideo: false,
+    buildSettings: () => ({ post_type: 'post' }),
+  },
+  'facebook': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    // FacebookDto: all fields optional. Empty {} is valid.
+  },
+  'threads': {
+    field: 'captionThreads',
+    requiresVideo: false,
+    // No DTO in Postiz for Threads.
+  },
+  'pinterest': {
+    field: 'captionPinterest',
+    requiresVideo: false,
+    note: 'Pinterest requires a board id from the OAuth-connected board list. Set POSTIZ_PINTEREST_BOARD_ID env var (the Pinterest board id) before publishing.',
+    buildSettings: (drop) => {
+      const board = process.env.POSTIZ_PINTEREST_BOARD_ID;
+      if (!board) return null;
+      const title = (drop && drop.name ? String(drop.name) : '').slice(0, 100);
+      return { board, title };
+    },
+  },
   // TikTok supports photo carousels via the Content Posting API's PHOTO media
   // type (rides on video.publish scope). Postiz handles the mode selection
   // automatically based on the media type we upload. Flip requiresVideo false
@@ -431,11 +478,257 @@ const POSTIZ_CHANNEL_MAP = {
       content_posting_method: 'DIRECT_POST',
     }),
   },
-  'youtube': { field: 'captionYoutubeTitle', requiresVideo: true },
-  // Reddit posts are most natural in the buy/sell community voice (price + condition
-  // + brief description + DM CTA). Reuse the captionFacebookGroup field which is
-  // tuned for that tone, no separate field needed.
+  'youtube': {
+    field: 'captionYoutubeTitle',
+    requiresVideo: true,
+    // YoutubeSettingsDto requires title (2..100 chars) and type (public /
+    // private / unlisted). Kept as requiresVideo so the fan-out skips the
+    // post entirely; when the video pipeline lands, buildSettings should be
+    // { title: drop.name.slice(0, 100), type: 'private' } for test posts.
+    note: 'Requires a video asset. Skipped until we have a Drop video pipeline. When enabled, ship type=private for initial test posts.',
+  },
+  // Reddit posts are most natural in the buy/sell community voice (price +
+  // condition + brief description + DM CTA). Reuse the captionFacebookGroup
+  // field which is tuned for that tone. Reddit DTO requires per-subreddit
+  // settings (subreddit id, flair rules, post type); Postiz UI handles that
+  // when the integration is picked, so we send an empty settings object and
+  // let Postiz's own validation surface the error if any is missing.
   'reddit': { field: 'captionFacebookGroup', requiresVideo: false },
+
+  // ---- Text-first channels with empty or all-optional DTOs ----
+  'linkedin': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    // LinkedinDto fields are all optional. Explicit false keeps posts as a
+    // single share rather than an image carousel.
+    buildSettings: () => ({ post_as_images_carousel: false }),
+  },
+  'linkedin-page': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    buildSettings: () => ({ post_as_images_carousel: false }),
+  },
+  'x': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    maxContentLength: 280,
+    note: 'X (Twitter) API access requires the paid Basic tier (~$100/mo as of 2026-07). Postiz posts will 401 without it. XDto also requires who_can_reply_post, defaulted to everyone.',
+    buildSettings: () => ({ who_can_reply_post: 'everyone' }),
+  },
+  'bluesky': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    maxContentLength: 300,
+    // No DTO in Postiz. Bluesky natively caps posts at 300 chars.
+  },
+  'mastodon': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    maxContentLength: 500,
+    // No DTO. Default Mastodon instances cap at 500 chars.
+  },
+  'telegram': { field: 'socialCopy', requiresVideo: false },
+  'nostr':    { field: 'socialCopy', requiresVideo: false },
+  'vk':       { field: 'socialCopy', requiresVideo: false },
+  'twitch':   { field: 'socialCopy', requiresVideo: false }, // TwitchDto all optional.
+  'kick':     { field: 'socialCopy', requiresVideo: false }, // KickDto is an empty class.
+  'tumblr':   { field: 'socialCopy', requiresVideo: false }, // TumblrDto all optional.
+  'gmb':      { field: 'socialCopy', requiresVideo: false }, // GmbSettingsDto all optional.
+  // Alias in case a future Postiz build emits the long form on integrations.
+  'google-my-business': { field: 'socialCopy', requiresVideo: false },
+
+  // ---- Channels needing per-account IDs, gated on env vars ----
+  'discord': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    note: 'Discord requires a channel id from the connected server. Set POSTIZ_DISCORD_CHANNEL_ID env var.',
+    buildSettings: () => {
+      const channel = process.env.POSTIZ_DISCORD_CHANNEL_ID;
+      if (!channel) return null;
+      return { channel };
+    },
+  },
+  'slack': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    note: 'Slack requires a channel id from the connected workspace. Set POSTIZ_SLACK_CHANNEL_ID env var.',
+    buildSettings: () => {
+      const channel = process.env.POSTIZ_SLACK_CHANNEL_ID;
+      if (!channel) return null;
+      return { channel };
+    },
+  },
+  'mewe': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    // MeweDto requires postType (timeline or group). Default to timeline;
+    // set POSTIZ_MEWE_GROUP_ID to switch to a group post.
+    buildSettings: () => {
+      const group = process.env.POSTIZ_MEWE_GROUP_ID;
+      if (group) return { postType: 'group', group };
+      return { postType: 'timeline' };
+    },
+  },
+  'whop': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    note: 'Whop requires company id + experience (forum) id. Set POSTIZ_WHOP_COMPANY_ID and POSTIZ_WHOP_EXPERIENCE_ID env vars.',
+    buildSettings: (drop) => {
+      const company = process.env.POSTIZ_WHOP_COMPANY_ID;
+      const experience = process.env.POSTIZ_WHOP_EXPERIENCE_ID;
+      if (!company || !experience) return null;
+      const title = (drop && drop.name ? String(drop.name) : 'New Drop').slice(0, 200);
+      return { company, experience, title };
+    },
+  },
+  'skool': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    note: 'Skool requires a group id and a label (category) id. Set POSTIZ_SKOOL_GROUP_ID and POSTIZ_SKOOL_LABEL_ID env vars.',
+    buildSettings: (drop) => {
+      const group = process.env.POSTIZ_SKOOL_GROUP_ID;
+      const label = process.env.POSTIZ_SKOOL_LABEL_ID;
+      if (!group || !label) return null;
+      const title = (drop && drop.name ? String(drop.name) : 'New Drop').slice(0, 200);
+      return { group, label, title };
+    },
+  },
+  'moltbook': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    note: 'Moltbook requires a submolt id (Moltbook s equivalent of a subreddit). Set POSTIZ_MOLTBOOK_SUBMOLT env var.',
+    buildSettings: () => {
+      const submolt = process.env.POSTIZ_MOLTBOOK_SUBMOLT;
+      if (!submolt) return null;
+      return { submolt };
+    },
+  },
+  'listmonk': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    note: 'Listmonk requires a mailing list id. Set POSTIZ_LISTMONK_LIST_ID (and optionally POSTIZ_LISTMONK_TEMPLATE_ID) env vars.',
+    buildSettings: (drop) => {
+      const list = process.env.POSTIZ_LISTMONK_LIST_ID;
+      if (!list) return null;
+      const subject = (drop && drop.name ? String(drop.name) : 'New Drop').slice(0, 150);
+      const previewSrc = drop && drop.socialCopy ? String(drop.socialCopy) : subject;
+      const preview = previewSrc.slice(0, 200);
+      const template = process.env.POSTIZ_LISTMONK_TEMPLATE_ID;
+      return template ? { subject, preview, list, template } : { subject, preview, list };
+    },
+  },
+  'lemmy': {
+    field: 'captionFacebookGroup',
+    requiresVideo: false,
+    note: 'Lemmy requires at least one community. Set POSTIZ_LEMMY_COMMUNITY_ID and POSTIZ_LEMMY_COMMUNITY_NAME env vars.',
+    buildSettings: (drop) => {
+      const communityId = process.env.POSTIZ_LEMMY_COMMUNITY_ID;
+      const communityName = process.env.POSTIZ_LEMMY_COMMUNITY_NAME;
+      if (!communityId || !communityName) return null;
+      const title = (drop && drop.name ? String(drop.name) : 'New Drop').slice(0, 200);
+      return {
+        subreddit: [{
+          value: {
+            id: communityId,
+            subreddit: communityName,
+            title,
+          },
+        }],
+      };
+    },
+  },
+  'wrapcast': {
+    // Postiz's identifier for Farcaster in the AllProvidersSettings union is
+    // "wrapcast". Kept for the deployed Postiz build.
+    field: 'socialCopy',
+    requiresVideo: false,
+    note: 'Farcaster (wrapcast) requires channel ids. Set POSTIZ_FARCASTER_CHANNEL_ID env var.',
+    buildSettings: () => {
+      const channelId = process.env.POSTIZ_FARCASTER_CHANNEL_ID;
+      if (!channelId) return null;
+      return { subreddit: [{ value: { id: channelId } }] };
+    },
+  },
+  'farcaster': {
+    // Alias in case a future Postiz build normalizes the identifier.
+    field: 'socialCopy',
+    requiresVideo: false,
+    note: 'Farcaster requires channel ids. Set POSTIZ_FARCASTER_CHANNEL_ID env var.',
+    buildSettings: () => {
+      const channelId = process.env.POSTIZ_FARCASTER_CHANNEL_ID;
+      if (!channelId) return null;
+      return { subreddit: [{ value: { id: channelId } }] };
+    },
+  },
+
+  // ---- Long-form content channels ----
+  'medium': {
+    field: 'captionYoutubeDescription',
+    requiresVideo: false,
+    // MediumSettingsDto requires title (min 2) and subtitle (min 2).
+    buildSettings: (drop) => {
+      const title = (drop && drop.name ? String(drop.name) : 'New Drop').slice(0, 100);
+      const subtitleSrc = drop && drop.socialCopy
+        ? String(drop.socialCopy)
+        : (drop && drop.name ? String(drop.name) : 'New Drop');
+      const subtitle = subtitleSrc.slice(0, 200);
+      return { title, subtitle, tags: [] };
+    },
+  },
+  'devto': {
+    field: 'captionYoutubeDescription',
+    requiresVideo: false,
+    // DevToSettingsDto requires title (min 2) and a tags array (may be empty).
+    buildSettings: (drop) => ({
+      title: (drop && drop.name ? String(drop.name) : 'New Drop').slice(0, 100),
+      tags: [],
+    }),
+  },
+  // Alias in case a future Postiz build emits the hyphenated identifier.
+  'dev-to': {
+    field: 'captionYoutubeDescription',
+    requiresVideo: false,
+    buildSettings: (drop) => ({
+      title: (drop && drop.name ? String(drop.name) : 'New Drop').slice(0, 100),
+      tags: [],
+    }),
+  },
+  'hashnode': {
+    field: 'captionYoutubeDescription',
+    requiresVideo: false,
+    note: 'Hashnode requires a publication id and at least one tag. Set POSTIZ_HASHNODE_PUBLICATION_ID env var. Optional POSTIZ_HASHNODE_TAG_VALUE / POSTIZ_HASHNODE_TAG_LABEL override the default tag.',
+    buildSettings: (drop) => {
+      const publication = process.env.POSTIZ_HASHNODE_PUBLICATION_ID;
+      if (!publication) return null;
+      const tagValue = process.env.POSTIZ_HASHNODE_TAG_VALUE || 'fashion';
+      const tagLabel = process.env.POSTIZ_HASHNODE_TAG_LABEL || 'Fashion';
+      const title = (drop && drop.name ? String(drop.name) : 'New Drop').slice(0, 100);
+      return {
+        title,
+        publication,
+        tags: [{ value: tagValue, label: tagLabel }],
+      };
+    },
+  },
+  'wordpress': {
+    field: 'captionYoutubeDescription',
+    requiresVideo: false,
+    // WordpressDto requires title and type. Default type=post and
+    // status=publish so entries go live rather than sitting as drafts.
+    buildSettings: (drop) => ({
+      title: (drop && drop.name ? String(drop.name) : 'New Drop').slice(0, 100),
+      type: 'post',
+      status: 'publish',
+    }),
+  },
+  'dribbble': {
+    field: 'socialCopy',
+    requiresVideo: false,
+    // DribbbleDto requires title (min 1). Team is optional.
+    buildSettings: (drop) => ({
+      title: (drop && drop.name ? String(drop.name) : 'New Drop').slice(0, 100),
+    }),
+  },
 };
 
 function postizHeaders() {
@@ -627,12 +920,35 @@ async function scheduleSocialPosts(drop) {
       continue;
     }
 
+    // Honor per-platform hard length caps (X 280, Bluesky 300, Mastodon 500).
+    // Slice with a trailing period rather than an em-dash, per brand rule.
+    if (mapping.maxContentLength && typeof content === 'string'
+        && content.length > mapping.maxContentLength) {
+      const cap = Math.max(1, mapping.maxContentLength - 1);
+      content = content.slice(0, cap).trimEnd() + '.';
+    }
+
     // Per-platform settings can be either a static object on mapping.settings
     // or a function on mapping.buildSettings(drop) when values need to derive
     // from the drop (TikTok's title from drop.name, for example).
-    const settings = typeof mapping.buildSettings === 'function'
-      ? mapping.buildSettings(drop)
-      : mapping.settings;
+    // buildSettings may return null to signal "cannot post without more
+    // per-account config" (e.g., Pinterest board id, Discord/Slack channel
+    // id). In that case we skip the channel with the mapping's note so Tyler
+    // sees the specific env var to set.
+    let settings;
+    if (typeof mapping.buildSettings === 'function') {
+      settings = mapping.buildSettings(drop);
+      if (settings === null) {
+        skipped.push({
+          identifier,
+          name,
+          reason: mapping.note || 'requires per-account config, not yet set',
+        });
+        continue;
+      }
+    } else {
+      settings = mapping.settings;
+    }
     try {
       const result = await createPostizPost({
         integrationId: id,
