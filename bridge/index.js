@@ -31,6 +31,11 @@ const {
   // Postiz (publish path), currently disabled until Temporal is sorted
   POSTIZ_API_URL,
   POSTIZ_API_KEY,
+  // Kill switch: when 'true' the bridge builds the exact payload it would send
+  // to Postiz's /public/v1/posts and logs it, but skips the actual POST. Lets
+  // us validate fan-out shape end to end without any content going live.
+  // Flip to any other value (or unset) to publish for real.
+  POSTIZ_DRY_RUN = 'true',
 
   // Strapi write-back (draft path)
   STRAPI_PUBLIC_URL = 'https://ops.prestigeaccessories.net',
@@ -451,25 +456,23 @@ async function createPostizPost({ integrationId, content, imageRef, when, settin
   const postEntry = {
     integration: { id: integrationId },
     value,
-    // group is required by Postiz's Post DTO; a stable string per fan-out
-    // is fine, we do not use it downstream for anything.
     group: randomIdish(),
-    // settings is a required field on Post. Send an empty object when the
-    // platform doesn't need any (Facebook, Instagram Standalone, etc.).
     settings: settings || {},
   };
+  const body = {
+    type: scheduleType,
+    date,
+    shortLink: false,
+    tags: [],
+    posts: [postEntry],
+  };
+  if (POSTIZ_DRY_RUN === 'true') {
+    console.log(`[postiz] DRY_RUN body=${JSON.stringify(body).slice(0, 400)}`);
+    return { dryRun: true, wouldPost: body };
+  }
   return postizFetch('/public/v1/posts', {
     method: 'POST',
-    body: JSON.stringify({
-      type: scheduleType,
-      date,
-      shortLink: false,
-      // tags lives at the top level of CreatePostDto, not per-post. Empty
-      // array satisfies the "must be an array" and "not null or undefined"
-      // validators when we do not have anyone to @-tag.
-      tags: [],
-      posts: [postEntry],
-    }),
+    body: JSON.stringify(body),
   });
 }
 
