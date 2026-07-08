@@ -273,7 +273,23 @@ async function patchDrop(documentId, patch) {
 
 // -----------------------------------------------------------------------------
 // /strapi/publish, entry.publish, schedule social posts + rebuild site
+//
+// Strapi 5 fires entry.publish the FIRST time a draft is published. On
+// re-publishes of an already-published entry, Strapi fires entry.update on the
+// draft, not entry.publish, so we also accept entry.update when the entry is
+// currently published (publishedAt set). A short-TTL in-memory de-dupe stops
+// us from double-firing when both events land in the same request-cycle.
 // -----------------------------------------------------------------------------
+
+// key = `${documentId}-${publishedAt}` -> Date.now(). 10-second TTL.
+const publishDedupe = new Map();
+const PUBLISH_DEDUPE_TTL_MS = 10_000;
+function sweepPublishDedupe() {
+  const cutoff = Date.now() - PUBLISH_DEDUPE_TTL_MS;
+  for (const [k, ts] of publishDedupe) {
+    if (ts < cutoff) publishDedupe.delete(k);
+  }
+}
 
 app.post('/strapi/publish', async (req, res) => {
   if (req.get('x-bridge-secret') !== WEBHOOK_SHARED_SECRET) {
@@ -283,8 +299,31 @@ app.post('/strapi/publish', async (req, res) => {
 
   const event = req.body;
   console.log(`[bridge] event ${event?.event} on model ${event?.model}`);
-  if (event?.model !== 'drop' || event?.event !== 'entry.publish') {
+  if (event?.model !== 'drop') {
+    return res.json({ skipped: true, reason: 'not a drop' });
+  }
+  const entryPublishedAt = event?.entry?.publishedAt;
+  const isPublishEvent = event?.event === 'entry.publish';
+  const isRepublishUpdate =
+    event?.event === 'entry.update'
+    && typeof entryPublishedAt === 'string'
+    && entryPublishedAt.trim().length > 0;
+  if (!isPublishEvent && !isRepublishUpdate) {
     return res.json({ skipped: true, reason: 'not a drop publish' });
+  }
+
+  sweepPublishDedupe();
+  const dedupeKey = `${event?.entry?.documentId ?? event?.entry?.id ?? 'unknown'}-${entryPublishedAt ?? ''}`;
+  if (publishDedupe.has(dedupeKey)) {
+    console.log(`[bridge] fan-out skipped, duplicate publish within TTL (key=${dedupeKey}, trigger=${event.event})`);
+    return res.json({ skipped: true, reason: 'duplicate publish within TTL', trigger: event.event });
+  }
+  publishDedupe.set(dedupeKey, Date.now());
+
+  if (isPublishEvent) {
+    console.log('[bridge] fan-out triggered by entry.publish');
+  } else {
+    console.log('[bridge] fan-out triggered by entry.update (already-published re-fire)');
   }
 
   const drop = event.entry;
@@ -468,12 +507,27 @@ async function createPostizPost({ integrationId, content, imageRef, when, settin
   };
   if (POSTIZ_DRY_RUN === 'true') {
     console.log(`[postiz] DRY_RUN body=${JSON.stringify(body).slice(0, 400)}`);
-    return { dryRun: true, wouldPost: body };
+    return { dryRun: true, postId: `dry-run-${randomIdish()}`, wouldPost: body };
   }
   return postizFetch('/public/v1/posts', {
     method: 'POST',
     body: JSON.stringify(body),
   });
+}
+
+// Postiz's PostsService.createPost returns an array of { postId, integration }
+// (one entry per created channel post). posts.controller returns that array
+// verbatim, so the /public/v1/posts response body is that shape too. Some
+// deployments wrap it under { posts: [...] }, so we accept both.
+function extractPostizPostId(result) {
+  if (!result) return null;
+  if (typeof result === 'object' && 'postId' in result && result.postId) return result.postId;
+  if (Array.isArray(result) && result[0]?.postId) return result[0].postId;
+  if (Array.isArray(result?.posts) && result.posts[0]?.postId) return result.posts[0].postId;
+  // Legacy/compat fallbacks in case a future Postiz version renames the field.
+  if (Array.isArray(result) && result[0]?.id) return result[0].id;
+  if (result?.id) return result.id;
+  return null;
 }
 
 function randomIdish() {
@@ -587,7 +641,7 @@ async function scheduleSocialPosts(drop) {
         when,
         settings,
       });
-      const postId = result?.id ?? result?.[0]?.id ?? result?.posts?.[0]?.id ?? null;
+      const postId = extractPostizPostId(result);
       console.log(`[bridge] drop=${slug} postiz scheduled ${identifier} (${name}) id=${postId} when=${when ? when.toISOString() : 'now'}`);
       scheduled.push({ identifier, name, id: postId, when: when ? when.toISOString() : 'now' });
     } catch (err) {
