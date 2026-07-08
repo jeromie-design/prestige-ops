@@ -440,29 +440,43 @@ async function uploadImageToPostiz(imageUrl) {
 async function createPostizPost({ integrationId, content, imageRef, when, settings }) {
   const scheduleType = when ? 'schedule' : 'now';
   const date = (when ?? new Date()).toISOString();
+  // PostContent DTO shape: content string, an id (arbitrary, we use random),
+  // a delay in seconds (0 for immediate), and image[] of {id, path} refs.
   const value = [{
     content,
+    id: randomIdish(),
+    delay: 0,
     image: imageRef ? [imageRef] : [],
   }];
   const postEntry = {
     integration: { id: integrationId },
     value,
-    // Empty tags array is required by Postiz's DTO validation even when we
-    // are not tagging anyone; sending null triggers a 400.
-    tags: [],
+    // group is required by Postiz's Post DTO; a stable string per fan-out
+    // is fine, we do not use it downstream for anything.
+    group: randomIdish(),
+    // settings is a required field on Post. Send an empty object when the
+    // platform doesn't need any (Facebook, Instagram Standalone, etc.).
+    settings: settings || {},
   };
-  if (settings && Object.keys(settings).length > 0) {
-    postEntry.settings = settings;
-  }
   return postizFetch('/public/v1/posts', {
     method: 'POST',
     body: JSON.stringify({
       type: scheduleType,
       date,
       shortLink: false,
+      // tags lives at the top level of CreatePostDto, not per-post. Empty
+      // array satisfies the "must be an array" and "not null or undefined"
+      // validators when we do not have anyone to @-tag.
+      tags: [],
       posts: [postEntry],
     }),
   });
+}
+
+function randomIdish() {
+  // Postiz just wants a string in these id/group slots; we generate one on
+  // the fly so it does not collide across drops or channels.
+  return 'br-' + Math.random().toString(36).slice(2, 10) + '-' + Date.now();
 }
 
 async function scheduleSocialPosts(drop) {
